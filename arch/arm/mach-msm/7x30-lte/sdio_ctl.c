@@ -413,8 +413,17 @@ static int sdio_cmux_read(struct sdio_cmux_ch *ch, void *data, int len)
 	r = copy_to_user(data, list_elem->ctl_pkt.data,
 			 bytes_to_read);
 	if (r > 0) {
-		pr_err(MODULE_NAME ":%s - copy_to_user failed for ch%d\n",
+		pr_info(MODULE_NAME ":%s - copy_to_user failed for ch%d\n",
 				 __func__, ch->lc_id);
+		/* HTC dbg log */
+		pr_info(MODULE_NAME ": return = %d, bytes_to_read = %d\n",
+			r, bytes_to_read);
+		if(data == NULL)
+			pr_info(MODULE_NAME ": data = NULL\n");
+		if(list_elem->ctl_pkt.data == NULL)
+			pr_info(MODULE_NAME ": list_elem->ctl_pkt.data = NULL\n");
+		/* HTC END */
+
 		spin_unlock_irqrestore(&ch->rx_lock, flags);
 		return -EINVAL;
 	}
@@ -871,7 +880,7 @@ static void sdio_demux_fn(struct work_struct *work)
         /* HTC */
         dbg_dump_buf("SDIO_QMI->RD-", ctl_data, read_avail);
         /* HTC_END */
-		
+
 		parse_ctl_data(ctl_data, read_avail);
 	}
 	return;

@@ -16,7 +16,7 @@
  *
  */
 
-
+#if defined(CONFIG_MACH_MECHA)
 
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -31,6 +31,7 @@
 #include <mach/usbdiag.h>
 #include <linux/diagchar.h>
 #include "../../../../drivers/char/diag/diagchar.h"
+#include "../../../../drivers/char/diag/diagfwd.h"
 #include "../../../../drivers/usb/gadget/f_diag.h"
 
 /* number of tx/rx requests to allocate */
@@ -41,7 +42,7 @@
 
 static int msmt_sdio_diag_debug_mask;
 int sdio_diag_initialized;
-int sdio_diag_enable;
+
 module_param_named(debug_mask, msmt_sdio_diag_debug_mask,
 		   int, S_IRUGO | S_IWUSR | S_IWGRP);
 
@@ -56,17 +57,17 @@ static uint32_t msm_sdio_diag_write_cnt;
 
 #define HTCDBG_INC_READ_CNT(x) do {	                       \
 		if (msmt_sdio_diag_debug_mask) {                \
-			msm_sdio_diag_read_cnt += (x);                \
-			printk(KERN_DEBUG "%s: total read bytes %u\n", \
-		     __func__, msm_sdio_diag_read_cnt);     \
+		msm_sdio_diag_read_cnt += (x);                \
+		printk(KERN_DEBUG "%s: total read bytes %u\n", \
+		       __func__, msm_sdio_diag_read_cnt);     \
 		} 																						\
 	} while (0)
 
 #define HTCDBG_INC_WRITE_CNT(x)  do {	                          \
 		if (msmt_sdio_diag_debug_mask) {                \
-			msm_sdio_diag_write_cnt += (x);                  \
-			printk(KERN_DEBUG "%s: total written bytes %u\n", \
-		     __func__, msm_sdio_diag_write_cnt);	  \
+		msm_sdio_diag_write_cnt += (x);                  \
+		printk(KERN_DEBUG "%s: total written bytes %u\n", \
+		       __func__, msm_sdio_diag_write_cnt);	  \
 		} 																						\
 	} while (0)
 #else
@@ -159,12 +160,12 @@ void __diag_sdio_mdm_send_req(void)
 		return;
 
 	if (!driver->in_busy_mdm_1) {
-		buf = driver->usb_buf_in_mdm_1;
-		write_ptr_modem = driver->usb_write_ptr_mdm_1;
+		buf = driver->buf_in_mdm_1;
+		write_ptr_modem = driver->write_ptr_mdm_1;
 		in_busy_ptr = &(driver->in_busy_mdm_1);
 	} else if (!driver->in_busy_mdm_2) {
-		buf = driver->usb_buf_in_mdm_2;
-		write_ptr_modem = driver->usb_write_ptr_mdm_2;
+		buf = driver->buf_in_mdm_2;
+		write_ptr_modem = driver->write_ptr_mdm_2;
 		in_busy_ptr = &(driver->in_busy_mdm_2);
 	} else {
 
@@ -175,14 +176,14 @@ void __diag_sdio_mdm_send_req(void)
 	if (sdio_diag_ch && buf) {
 		r = sdio_read_avail(sdio_diag_ch);
 
-		if (r > USB_MAX_IN_BUF) {
-			if (r < MAX_BUF_SIZE) {
+		if (r > IN_BUF_SIZE) {
+			if (r < MAX_IN_BUF_SIZE) {
 				printk(KERN_ALERT "\n diag: SDIO DIAG sending in "
 						   "packets upto %d bytes", r);
 				buf = krealloc(buf, r, GFP_KERNEL);
 			} else {
 				printk(KERN_ALERT "\n diag: SDIO DIAG sending in "
-				"packets more than %d bytes", MAX_BUF_SIZE);
+				"packets more than %d bytes", MAX_IN_BUF_SIZE);
 				return;
 			}
 		}
@@ -235,11 +236,12 @@ void __diag_sdio_mdm_send_req(void)
 						decode_encode_hdlc(buf, &r, req->buf, 0, 4);
 					}
 				}
+
 #endif
 				if (driver->logging_mode == MEMORY_DEVICE_MODE) {
 					write_ptr_modem->length = r;
 					*in_busy_ptr = 1;
-					diag_device_write(buf, MDM_DATA, write_ptr_modem);
+					diag_device_write(buf, SDIO_DATA, write_ptr_modem);
 					HTCDBG_INC_READ_CNT(r);
 				}
 
@@ -394,9 +396,6 @@ struct platform_driver sdio_diag_driver = {
 
 int __init sdio_diag_init(void)
 {
-	if (sdio_diag_enable)
-		return platform_driver_register(&sdio_diag_driver);
-	else
-		return 0;
+	return platform_driver_register(&sdio_diag_driver);
 }
-
+#endif
