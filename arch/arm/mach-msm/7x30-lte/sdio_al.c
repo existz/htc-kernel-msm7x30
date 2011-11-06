@@ -46,7 +46,6 @@
 #include <linux/fs.h>
 #include <linux/wakelock.h>
 #include <linux/slab.h>
-
 #include <linux/mmc/core.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
@@ -84,8 +83,6 @@ extern int ctl_wait_timed_out;
 extern int msmsdcc_set_pwrsave(struct mmc_host *mmc, int pwrsave);
 extern void msmsdcc_dumpreg(struct mmc_host *mmc);
 static void error_state_print(char *message);
-
-static unsigned kernel_flag;
 
 /*
 	al_verbose specify:
@@ -214,6 +211,7 @@ static void dbg_dump_buf(const char *name, u8 *prestr, const u8 *buf, int len)
 }
 
 /* Create attribute for sdio debug purpose */
+#if 1 /* HTC: 20110519 remove device attribute due to CtsPermissionTestCases */
 static ssize_t sdio_dbg_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
     int ret = -EINVAL;
@@ -231,8 +229,8 @@ static ssize_t sdio_dbg_store(struct device *dev, struct device_attribute *attr,
 
 	return size;
 }
-
-static DEVICE_ATTR(sdio_dbg,  0666, sdio_dbg_show,  sdio_dbg_store);
+static DEVICE_ATTR(sdio_dbg,  0664, sdio_dbg_show,  sdio_dbg_store);
+#endif /* end of sdio_dbg attribute */
 #endif /* HTC_END */
 
 
@@ -662,7 +660,7 @@ static int get_min_poll_time_msec(void);
 static u32 check_pending_rx_packet(struct sdio_channel *ch, u32 eot);
 static u32 remove_handled_rx_packet(struct sdio_channel *ch);
 static int set_pipe_threshold(int pipe_index, int threshold);
-static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch);
+static int sdio_al_wake_up(u32 not_from_int, struct sdio_channel *ch);
 static void ask_reading_mailbox(void);
 
 #ifdef CONFIG_DEBUG_FS
@@ -819,6 +817,7 @@ static int read_mailbox(int from_isr)
 	u32 overflow_pipe = 0;
 	u32 underflow_pipe = 0;
 	u32 thresh_intr_mask = 0;
+	const int retry_times = 5;			/* HTC: retry of reading mailbox */
 
 	if (sdio_al->is_err) {
 		error_state_print("ignore request read_mailbox");
@@ -832,18 +831,39 @@ static int read_mailbox(int from_isr)
 		sdio_claim_host(sdio_al->card->sdio_func[0]);
 		al_debug(MODULE_NAME ":end   sdio_claim_host %s\n", __func__);
 	}
-	al_debug(MODULE_NAME ":before sdio_memcpy_fromio. %s\n", __func__);
-	ret = sdio_memcpy_fromio(func1, mailbox,
-			HW_MAILBOX_ADDR, sizeof(*mailbox));
-	if (ret) {
-		/* HTC: dump register for debug, and try once again */
-		pr_info(MODULE_NAME ": retry %s sdio_memcpy_fromio\n", __func__);
-		msmsdcc_dumpreg(sdio_al->card->host);
-		msleep(100);
+
+	/* Added by HTC: retry read_mailbox */
+	for (i = 0; i < retry_times; i++) {
+		if (i != 0)
+			pr_info(MODULE_NAME ": GPIO (%d)=%d (%s) retry %d\n",
+				sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
+				gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id),
+				__func__, i);
+
+		al_debug(MODULE_NAME ":before sdio_memcpy_fromio. %s\n", __func__);
 		ret = sdio_memcpy_fromio(func1, mailbox,
 				HW_MAILBOX_ADDR, sizeof(*mailbox));
+		al_debug(MODULE_NAME ":after sdio_memcpy_fromio. %s\n", __func__);
+
+		if (!ret)
+			break;
 	}
-	al_debug(MODULE_NAME ":after sdio_memcpy_fromio. %s\n", __func__);
+
+	if (ret) {
+		pr_err(MODULE_NAME ":Fail to read Mailbox for card %d,"
+				    " goto error state\n",
+		       sdio_al->card->host->index);
+		pr_info(MODULE_NAME ": GPIO (%d)=%d\n",
+				sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
+				gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
+		msmsdcc_dumpreg(sdio_al->card->host);
+		sdio_al->is_err = true;
+
+		sdio_release_irq(func1);
+		/* Stop the timer to stop reading the mailbox */
+		sdio_al->poll_delay_msec = 0;
+		goto exit_err;
+	}
 
 	eot_pipe =	(mailbox->eot_pipe_0_7) |
 			(mailbox->eot_pipe_8_15<<8);
@@ -857,20 +877,6 @@ static int read_mailbox(int from_isr)
 	thresh_intr_mask =
 		(mailbox->mask_thresh_above_limit_pipe_0_7) |
 		(mailbox->mask_thresh_above_limit_pipe_8_15<<8);
-
-
-	if (ret) {
-		al_err(MODULE_NAME ":Error - Fail to read Mailbox,"
-				    " goto error state\n");
-		sdio_al->is_err = true;
-		pr_info(MODULE_NAME ":GPIO (%d)=%d\n", sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
-			gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
-
-		sdio_release_irq(func1);
-		/* Stop the timer to stop reading the mailbox */
-		sdio_al->poll_delay_msec = 0;
-		goto exit_err;
-	}
 
 	if (overflow_pipe || underflow_pipe)
 		al_err(MODULE_NAME ":Error - Mailbox ERROR "
@@ -1801,7 +1807,7 @@ static void restart_timer(void)
  *  4. Restore default thresholds
  *  5. Start the mailbox and inactivity timer again
  */
-static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch)
+static int sdio_al_wake_up(u32 not_from_int, struct sdio_channel *ch)
 {
 	int ret = 0, i;
 	struct sdio_func *wk_func =
@@ -1815,12 +1821,12 @@ static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch)
 		return -ENODEV;
 	}
 
-	/* HTC */
+	/* HTC: wakeup by 9k, no ch info */
 	if (ch == NULL) {
 		pr_info(MODULE_NAME ": %s by interrupt - 9k write to 7k \n", __func__);
 		wakeup_from_interrupt = 1;
 	}
-	else {
+	else {/* wakeup by 8k */
 		getnstimeofday(&ts); rtc_time_to_tm(ts.tv_sec, &tm);
 
 		pr_info(MODULE_NAME ": %s <%s> tx_total=%d, rx_total=%d, write_avail=%d, read_avail=%d,"
@@ -1834,7 +1840,7 @@ static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch)
 	wake_lock(&sdio_al->wake_lock);
 
 	/*
-	if (enable_wake_up_func)
+	if (not_from_int)
 		pr_info(MODULE_NAME ":Wake up (not by interrupt)");
 	else
 		pr_info(MODULE_NAME ":Wake up by interrupt");
@@ -1864,31 +1870,31 @@ static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch)
 			pr_err(MODULE_NAME ":Poll GPIO fail\n");
 			break;
 		}
-		al_debug(MODULE_NAME ":GPIO (%d)=%d\n",
+
+		pr_info(MODULE_NAME ":In %s GPIO (%d)=%d\n", __func__,
 			sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
 			gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
+
 		if (gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id))
 			break;
 		udelay(TIME_TO_WAIT_US);
 	}
 
 
-	if (enable_wake_up_func) {
-		/* Enable Wake up Function */
-		ret = sdio_al_enable_func_retry(wk_func, "wakeup func");
-		if (ret) {
-			struct sdio_func *func1;
-			al_err(MODULE_NAME ":Error - sdio_enable_func() err=%d\n",
-			       -ret);
-			ret = -EIO;
-			WARN_ON(ret);
-			sdio_al->is_err = true;
-			pr_info(MODULE_NAME ":GPIO (%d)=%d\n", sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
-				gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
-			func1 = sdio_al->card->sdio_func[0];
-			sdio_release_irq(func1);
-			return ret;
-		}
+	/* Enable Wake up Function */
+	ret = sdio_al_enable_func_retry(wk_func, "wakeup func");
+	if (ret) {
+		struct sdio_func *func1;
+		al_err(MODULE_NAME ":Error - sdio_enable_func() err=%d\n",
+		       -ret);
+		ret = -EIO;
+		WARN_ON(ret);
+		sdio_al->is_err = true;
+		pr_info(MODULE_NAME ":GPIO (%d)=%d\n", sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
+			gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
+		func1 = sdio_al->card->sdio_func[0];
+		sdio_release_irq(func1);
+		return ret;
 	}
 	/* Mark NOT OK_TOSLEEP */
 	sdio_al->is_ok_to_sleep = 0;
@@ -1903,8 +1909,7 @@ static int sdio_al_wake_up(u32 enable_wake_up_func, struct sdio_channel *ch)
 					   ch->read_threshold);
 		}
 	}
-	if (enable_wake_up_func)
-		sdio_disable_func(wk_func);
+	sdio_disable_func(wk_func);
 
 	/* Start the timer again*/
 	restart_inactive_time();
@@ -1965,6 +1970,10 @@ static void timer_handler(unsigned long data)
 		PRINTRTC;
 		printk(" __ \n");
 	}
+
+	pr_info(MODULE_NAME ":In %s - GPIO (%d)=%d\n", __func__,
+		sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
+		gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
 
 	ask_reading_mailbox();
 
@@ -2993,6 +3002,7 @@ static struct sdio_driver sdio_al_sdiofn_driver = {
     .drv.pm    = &sdio_al_sdio_pm_ops,
 };
 
+#include <mach/board_htc.h>
 
 /**
  *  Module Init.
@@ -3007,6 +3017,19 @@ static int __init sdio_al_init(void)
 	al_verbose(MODULE_NAME "%s()++\n", __func__);
 
 	pr_info(MODULE_NAME ":sdio_al_init\n");
+
+	/* Switch sdio debug flag by kernelflag */
+	if (get_kernel_flag() & BIT16) /* rpc debug with raw data */
+		sdio_dbg_flag |= 0x70100;
+	if (get_kernel_flag() & BIT17) /* qmi debug with raw data*/
+		sdio_dbg_flag |= 0x104400;
+	if (get_kernel_flag() & BIT18) /* rmnet debug with raw data */
+		sdio_dbg_flag |= 0x88200;
+	if (get_kernel_flag() & BIT19) /* al debug */
+		sdio_dbg_flag |= 0x7;
+	if (get_kernel_flag() & BIT20) /* all raw data, no deubg msg */
+		sdio_dbg_flag |= 0x148f00;
+	pr_info(MODULE_NAME ": %s(): get sdio_dbg_flag=0x%x\n", __func__, sdio_dbg_flag);
 
 	sdio_al = kzalloc(sizeof(struct sdio_al), GFP_KERNEL);
 	if (sdio_al == NULL) {
@@ -3088,50 +3111,6 @@ static void __exit sdio_al_exit(void)
 	pr_info(MODULE_NAME ":sdio_al_exit complete\n");
 }
 
-#if 1 /* HTC */
-static int kernel_flag_boot_config(char *str)
-{
-	unsigned check_bit_start = 0x10000;
-	int i = 0 ;
-
-	if (!str) {
-		al_err(MODULE_NAME ": Error - %s, EINVAL\n", __func__);
-		return -EINVAL;
-	}
-
-	kernel_flag = simple_strtoul(str, NULL, 16);
-
-	pr_info(MODULE_NAME ": %s(): get kernel_flag=0x%x\n", __func__, kernel_flag);
-
-	/* writeconfig <-> sdio_dbg_flag mapping */
-	for(i = 0; i < 16; i++) {
-		switch(kernel_flag & (check_bit_start << i)) {
-		case BIT16: /* rpc debug with raw data */
-			sdio_dbg_flag |= 0x70100;
-			break;
-		case BIT17: /* qmi debug with raw data*/
-			sdio_dbg_flag |= 0x104400;
-			break;
-		case BIT18: /* rmnet debug with raw data */
-			sdio_dbg_flag |= 0x88200;
-			break;
-		case BIT19: /* al debug */
-			sdio_dbg_flag |= 0x7;
-			break;
-		case BIT20: /* all raw data, no deubg msg */
-			sdio_dbg_flag |= 0x148f00;
-			break;
-		default:
-			break;
-		}
-	}
-
-	pr_info(MODULE_NAME ": %s(): get sdio_dbg_flag=0x%x\n", __func__, sdio_dbg_flag);
-	return 0;
-}
-early_param("kernelflag", kernel_flag_boot_config);
-#endif  /* HTC */
-
 /**
  * HTC: check if error exceed 10 times, if so, it will not print out error msg again
  *   this function is used to avoid msg flood.
@@ -3148,6 +3127,9 @@ static void error_state_print(char *message)
             sdio_al->channel[1].total_tx_bytes,
             sdio_al->channel[2].total_rx_bytes,
             sdio_al->channel[2].total_tx_bytes);
+		pr_info(MODULE_NAME ":GPIO (%d)=%d\n",
+			sdio_al->mdm2ap_status->mdm2ap_status_gpio_id,
+			gpio_get_value(sdio_al->mdm2ap_status->mdm2ap_status_gpio_id));
 		msmsdcc_dumpreg(sdio_al->card->host);
     }
     else if (repeat_cnt == MAX_REPEAT)
