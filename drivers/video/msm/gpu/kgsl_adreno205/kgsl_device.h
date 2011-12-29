@@ -40,7 +40,7 @@
 #include "kgsl_mmu.h"
 #include "kgsl_ringbuffer.h"
 
-#define KGSL_CONTEXT_MAX        32
+#define KGSL_CONTEXT_MAX       (CONFIG_MSM_KGSL_CONTEXTS)
 
 #define KGSL_TIMEOUT_NONE       0
 #define KGSL_TIMEOUT_DEFAULT    0xFFFFFFFF
@@ -168,8 +168,8 @@ struct kgsl_file_private {
 
 struct kgsl_device_private {
 	struct list_head list;
-	unsigned long ctxt_bitmap[BITS_TO_LONGS(KGSL_CONTEXT_MAX)];
 	unsigned long pid;
+	unsigned long ctxt_bitmap[BITS_TO_LONGS(KGSL_CONTEXT_MAX)];
 	struct kgsl_device *device;
 	struct kgsl_file_private *process_priv;
 };
