@@ -17,6 +17,8 @@
  */
 #include <linux/firmware.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/log2.h>
 
 #include "kgsl.h"
 #include "adreno.h"
@@ -48,19 +50,6 @@
 #define YAMATO_PM4_FW "yamato_pm4.fw"
 #define LEIA_PFP_470_FW "leia_pfp_470.fw"
 #define LEIA_PM4_470_FW "leia_pm4_470.fw"
-
-/*  ringbuffer size log2 quadwords equivalent */
-inline unsigned int kgsl_ringbuffer_sizelog2quadwords(unsigned int sizedwords)
-{
-	unsigned int sizelog2quadwords = 0;
-	int i = sizedwords >> 1;
-
-	while (i >>= 1)
-		sizelog2quadwords++;
-
-	return sizelog2quadwords;
-}
-
 
 /* functions */
 void kgsl_cp_intrcallback(struct kgsl_device *device)
@@ -157,21 +146,12 @@ static void kgsl_ringbuffer_submit(struct kgsl_ringbuffer *rb)
 {
 	BUG_ON(rb->wptr == 0);
 
-	GSL_RB_UPDATE_WPTR_POLLING(rb);
-	/* Drain write buffer and data memory barrier */
-	dsb();
-	wmb();
-
-	/* Memory fence to ensure all data has posted.  On some systems,
-	* like 7x27, the register block is not allocated as strongly ordered
-	* memory.  Adding a memory fence ensures ordering during ringbuffer
-	* submits.*/
+	/*synchronize memory before informing the hardware of the
+	 *new commands.
+	 */
 	mb();
-	outer_sync();
 
 	kgsl_yamato_regwrite(rb->device, REG_CP_RB_WPTR, rb->wptr);
-
-	rb->flags |= KGSL_FLAGS_ACTIVE;
 }
 
 static int
@@ -304,6 +284,7 @@ static int kgsl_ringbuffer_load_pm4_ucode(struct kgsl_device *device)
 		if (len % ((sizeof(uint32_t) * 3)) != sizeof(uint32_t)) {
 			KGSL_DRV_ERR(device, "Bad firmware size: %d\n", len);
 			ret = -EINVAL;
+			kfree(ptr);
 			goto err;
 		}
 
@@ -346,6 +327,7 @@ static int kgsl_ringbuffer_load_pfp_ucode(struct kgsl_device *device)
 		if (len % sizeof(uint32_t) != 0) {
 			KGSL_DRV_ERR(device, "Bad firmware size: %d\n", len);
 			ret = -EINVAL;
+			kfree(ptr);
 			goto err;
 		}
 
@@ -397,11 +379,20 @@ int kgsl_ringbuffer_start(struct kgsl_ringbuffer *rb, unsigned int init_ram)
 	/*setup REG_CP_RB_CNTL */
 	kgsl_yamato_regread(device, REG_CP_RB_CNTL, &rb_cntl);
 	cp_rb_cntl.val = rb_cntl;
-	/* size of ringbuffer */
-	cp_rb_cntl.f.rb_bufsz =
-		kgsl_ringbuffer_sizelog2quadwords(rb->sizedwords);
-	/* quadwords to read before updating mem RPTR */
-	cp_rb_cntl.f.rb_blksz = rb->blksizequadwords;
+
+	/*
+	 * The size of the ringbuffer in the hardware is the log2
+	 * representation of the size in quadwords (sizedwords / 2)
+	 */
+	cp_rb_cntl.f.rb_bufsz = ilog2(rb->sizedwords >> 1);
+
+	/*
+	 * Specify the quadwords to read before updating mem RPTR.
+	 * Like above, pass the log2 representation of the blocksize
+	 * in quadwords.
+	*/
+	cp_rb_cntl.f.rb_blksz = ilog2(KGSL_RB_BLKSIZE >> 3);
+
 	cp_rb_cntl.f.rb_poll_en = GSL_RB_CNTL_POLL_EN; /* WPTR polling */
 	/* mem RPTR writebacks */
 	cp_rb_cntl.f.rb_no_update =  GSL_RB_CNTL_NO_UPDATE;
@@ -524,8 +515,12 @@ int kgsl_ringbuffer_init(struct kgsl_device *device)
 	struct kgsl_ringbuffer *rb = &yamato_device->ringbuffer;
 
 	rb->device = device;
-	rb->sizedwords = (2 << kgsl_cfg_rb_sizelog2quadwords);
-	rb->blksizequadwords = kgsl_cfg_rb_blksizequadwords;
+	/*
+	 * It is silly to convert this to words and then back to bytes
+	 * immediately below, but most of the rest of the code deals
+	 * in words, so we might as well only do the math once
+	 */
+	rb->sizedwords = KGSL_RB_SIZE >> 2;
 
 	/* allocate memory for ringbuffer */
 	status = kgsl_allocate_contig(&rb->buffer_desc, (rb->sizedwords << 2));
@@ -554,16 +549,13 @@ int kgsl_ringbuffer_close(struct kgsl_ringbuffer *rb)
 {
 	struct kgsl_yamato_device *yamato_device = KGSL_YAMATO_DEVICE(
 							rb->device);
-	if (rb->buffer_desc.hostptr)
-		kgsl_sharedmem_free(&rb->buffer_desc);
 
-	if (rb->memptrs_desc.hostptr)
-		kgsl_sharedmem_free(&rb->memptrs_desc);
+	kgsl_sharedmem_free(&rb->buffer_desc);
+	kgsl_sharedmem_free(&rb->memptrs_desc);
 
-	if (yamato_device->pfp_fw != NULL)
-		kfree(yamato_device->pfp_fw);
-	if (yamato_device->pm4_fw != NULL)
-		kfree(yamato_device->pm4_fw);
+	kfree(yamato_device->pfp_fw);
+	kfree(yamato_device->pm4_fw);
+
 	yamato_device->pfp_fw = NULL;
 	yamato_device->pm4_fw = NULL;
 
@@ -679,16 +671,15 @@ kgsl_ringbuffer_issueibcmds(struct kgsl_device_private *dev_priv,
 	unsigned int *link;
 	unsigned int *cmds;
 	unsigned int i;
-	struct kgsl_yamato_context *drawctxt = context->devctxt;
+	struct kgsl_yamato_context *drawctxt;
 
 	if (device->state & KGSL_STATE_HUNG)
 		return -EBUSY;
 	if (!(yamato_device->ringbuffer.flags & KGSL_FLAGS_STARTED) ||
-	      context == NULL)
+	      context == NULL || ibdesc == 0 || numibs == 0)
 		return -EINVAL;
 
-	BUG_ON(ibdesc == 0);
-	BUG_ON(numibs == 0);
+	drawctxt = context->devctxt;
 
 	if (drawctxt->flags & CTXT_FLAGS_GPU_HANG) {
 		KGSL_CTXT_WARN(device, "Context %p caused a gpu hang.."
@@ -759,7 +750,6 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 
 	retired_timestamp = device->ftbl.device_readtimestamp(
 				device, KGSL_TIMESTAMP_RETIRED);
-	rmb();
 	KGSL_DRV_ERR(device, "GPU successfully executed till ts: %x\n",
 			retired_timestamp);
 	/*
@@ -776,7 +766,6 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 	 * sucessfully executed command */
 	while ((rb_rptr / sizeof(unsigned int)) != rb->wptr) {
 		kgsl_sharedmem_readl(&rb->buffer_desc, &value, rb_rptr);
-		rmb();
 		if (value == retired_timestamp) {
 			rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size);
@@ -787,7 +776,6 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 			rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size);
 			kgsl_sharedmem_readl(&rb->buffer_desc, &val3, rb_rptr);
-			rmb();
 			/* match the pattern found at the end of a command */
 			if ((val1 == 2 &&
 				val2 == pm4_type3_packet(PM4_INTERRUPT, 1)
@@ -834,7 +822,6 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 	kgsl_sharedmem_readl(&rb->buffer_desc, &val2,
 				adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size));
-	rmb();
 	if (val1 == pm4_nop_packet(1) && val2 == KGSL_CMD_IDENTIFIER) {
 		KGSL_DRV_ERR(device,
 			"GPU recovery from hang not possible because "
@@ -850,26 +837,29 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 		kgsl_sharedmem_readl(&rb->buffer_desc, &value, rb_rptr);
 		rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 						rb->buffer_desc.size);
-		rmb();
 		/* check for context switch indicator */
 		if (value == KGSL_CONTEXT_TO_MEM_IDENTIFIER) {
 			kgsl_sharedmem_readl(&rb->buffer_desc, &value, rb_rptr);
 			rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size);
-			rmb();
 			BUG_ON(value != pm4_type3_packet(PM4_MEM_WRITE, 2));
 			kgsl_sharedmem_readl(&rb->buffer_desc, &val1, rb_rptr);
 			rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size);
-			rmb();
 			BUG_ON(val1 != (device->memstore.gpuaddr +
 				KGSL_DEVICE_MEMSTORE_OFFSET(current_context)));
 			kgsl_sharedmem_readl(&rb->buffer_desc, &value, rb_rptr);
 			rb_rptr = adreno_ringbuffer_inc_wrapped(rb_rptr,
 							rb->buffer_desc.size);
-			rmb();
 			BUG_ON((copy_rb_contents == 0) &&
 				(value == cur_context));
+			/*
+			 * If we were copying the commands and got to this point
+			 * then we need to remove the 3 commands that appear
+			 * before KGSL_CONTEXT_TO_MEM_IDENTIFIER
+			 */
+			if (temp_idx)
+				temp_idx -= 3;
 			/* if context switches to a context that did not cause
 			 * hang then start saving the rb contents as those
 			 * commands can be executed */
@@ -886,10 +876,6 @@ int kgsl_ringbuffer_extract(struct kgsl_ringbuffer *rb,
 				temp_rb_buffer[temp_idx++] = val1;
 				temp_rb_buffer[temp_idx++] = value;
 			} else {
-				/* if temp_idx is not 0 then we do not need to
-				 * copy extra dwords indicating a kernel cmd */
-				if (temp_idx)
-					temp_idx -= 3;
 				copy_rb_contents = 0;
 			}
 		} else if (copy_rb_contents)

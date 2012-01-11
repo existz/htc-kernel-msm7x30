@@ -17,6 +17,7 @@
  */
 #include <linux/delay.h>
 #include <linux/uaccess.h>
+#include <linux/sched.h>
 
 #include <linux/vmalloc.h>
 
@@ -33,10 +34,6 @@
 #define GSL_RBBM_INT_MASK \
 	 (RBBM_INT_CNTL__RDERR_INT_MASK |  \
 	  RBBM_INT_CNTL__DISPLAY_UPDATE_INT_MASK)
-
-#define GSL_SQ_INT_MASK \
-	(SQ_INT_CNTL__PS_WATCHDOG_MASK | \
-	 SQ_INT_CNTL__VS_WATCHDOG_MASK)
 
 /* Yamato MH arbiter config*/
 #define KGSL_CFG_YAMATO_MHARB \
@@ -191,25 +188,6 @@ static void kgsl_yamato_rbbm_intrcallback(struct kgsl_device *device)
 	kgsl_yamato_regwrite_isr(device, REG_RBBM_INT_ACK, status);
 }
 
-static void kgsl_yamato_sq_intrcallback(struct kgsl_device *device)
-{
-	unsigned int status = 0;
-
-	kgsl_yamato_regread_isr(device, REG_SQ_INT_STATUS, &status);
-
-	if (status & SQ_INT_CNTL__PS_WATCHDOG_MASK)
-		KGSL_DRV_INFO(device, "sq ps watchdog interrupt\n");
-	else if (status & SQ_INT_CNTL__VS_WATCHDOG_MASK)
-		KGSL_DRV_INFO(device, "sq vs watchdog interrupt\n");
-	else
-		KGSL_DRV_WARN(device,
-			"bad bits in REG_SQ_INT_STATUS %08x\n", status);
-
-
-	status &= GSL_SQ_INT_MASK;
-	kgsl_yamato_regwrite_isr(device, REG_SQ_INT_ACK, status);
-}
-
 irqreturn_t kgsl_yamato_isr(int irq, void *data)
 {
 	irqreturn_t result = IRQ_NONE;
@@ -236,11 +214,6 @@ irqreturn_t kgsl_yamato_isr(int irq, void *data)
 
 	if (status & MASTER_INT_SIGNAL__RBBM_INT_STAT) {
 		kgsl_yamato_rbbm_intrcallback(device);
-		result = IRQ_HANDLED;
-	}
-
-	if (status & MASTER_INT_SIGNAL__SQ_INT_STAT) {
-		kgsl_yamato_sq_intrcallback(device);
 		result = IRQ_HANDLED;
 	}
 
@@ -628,8 +601,6 @@ static int kgsl_yamato_stop(struct kgsl_device *device)
 	del_timer(&device->idle_timer);
 	kgsl_yamato_regwrite(device, REG_RBBM_INT_CNTL, 0);
 
-	kgsl_yamato_regwrite(device, REG_SQ_INT_CNTL, 0);
-
 	yamato_device->drawctxt_active = NULL;
 
 	kgsl_ringbuffer_stop(&yamato_device->ringbuffer);
@@ -691,7 +662,8 @@ kgsl_yamato_recover_hang(struct kgsl_device *device)
 				KGSL_DEVICE_MEMSTORE_OFFSET(soptimestamp));
 	kgsl_sharedmem_readl(&device->memstore, &eoptimestamp,
 				KGSL_DEVICE_MEMSTORE_OFFSET(eoptimestamp));
-	rmb();
+	/* Make sure memory is synchronized before restarting the GPU */
+	mb();
 	KGSL_CTXT_ERR(device,
 		"Context that caused a GPU hang: %x\n", bad_context);
 	/* restart device */
@@ -720,6 +692,7 @@ kgsl_yamato_recover_hang(struct kgsl_device *device)
 			KGSL_DEVICE_MEMSTORE_OFFSET(ts_cmp_enable),
 			enable_ts);
 	}
+	/* Make sure all writes are posted before the GPU reads them */
 	wmb();
 	/* Mark the invalid context so no more commands are accepted from
 	 * that context */
@@ -1044,7 +1017,10 @@ static void _yamato_regread(struct kgsl_device *device,
 	BUG_ON(offsetwords*sizeof(uint32_t) >= device->regspace.sizebytes);
 	reg = (unsigned int *)(device->regspace.mmio_virt_base
 				+ (offsetwords << 2));
-	*value = readl(reg);
+	/*ensure this read finishes before the next one.
+	 * i.e. act like normal readl() */
+	*value = __raw_readl(reg);
+	rmb();
 }
 
 void kgsl_yamato_regread(struct kgsl_device *device, unsigned int offsetwords,
@@ -1073,8 +1049,10 @@ static void _yamato_regwrite(struct kgsl_device *device,
 	reg = (unsigned int *)(device->regspace.mmio_virt_base
 				+ (offsetwords << 2));
 
-	writel(value, reg);
-
+	/*ensure previous writes post before this one,
+	 * i.e. act like normal writel() */
+	wmb();
+	__raw_writel(value, reg);
 }
 
 void kgsl_yamato_regwrite(struct kgsl_device *device, unsigned int offsetwords,
@@ -1102,12 +1080,12 @@ static int kgsl_check_interrupt_timestamp(struct kgsl_device *device,
 		mutex_lock(&device->mutex);
 		kgsl_sharedmem_readl(&device->memstore, &enableflag,
 			KGSL_DEVICE_MEMSTORE_OFFSET(ts_cmp_enable));
-		rmb();
+		mb();
 
 		if (enableflag) {
 			kgsl_sharedmem_readl(&device->memstore, &ref_ts,
 				KGSL_DEVICE_MEMSTORE_OFFSET(ref_wait_ts));
-			rmb();
+			mb();
 			if (timestamp_cmp(ref_ts, timestamp)) {
 				kgsl_sharedmem_writel(&device->memstore,
 				KGSL_DEVICE_MEMSTORE_OFFSET(ref_wait_ts),

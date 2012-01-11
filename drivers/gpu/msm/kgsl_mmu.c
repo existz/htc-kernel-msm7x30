@@ -20,6 +20,8 @@
 #include <linux/spinlock.h>
 #include <linux/genalloc.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
+
 #include "kgsl.h"
 #include "kgsl_mmu.h"
 #include "adreno_ringbuffer.h"
@@ -578,14 +580,16 @@ static inline void
 kgsl_pt_map_set(struct kgsl_pagetable *pt, uint32_t pte, uint32_t val)
 {
 	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	writel(val, &baseptr[pte]);
+
+	writel_relaxed(val, &baseptr[pte]);
 }
 
 static inline uint32_t
 kgsl_pt_map_getaddr(struct kgsl_pagetable *pt, uint32_t pte)
 {
 	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	return readl(&baseptr[pte]) & GSL_PT_PAGE_ADDR_MASK;
+	uint32_t ret = readl_relaxed(&baseptr[pte]) & GSL_PT_PAGE_ADDR_MASK;
+	return ret;
 }
 
 void kgsl_mh_intrcallback(struct kgsl_device *device)
@@ -998,7 +1002,8 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 	KGSL_STATS_ADD(memdesc->size, pagetable->stats.mapped,
 		       pagetable->stats.max_mapped);
 
-	mb();
+	/* Post all writes to the pagetable */
+	wmb();
 
 	/* Invalidate tlb only if current page table used by GPU is the
 	 * pagetable that we used to allocate */
@@ -1055,7 +1060,9 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 	pagetable->stats.entries--;
 	pagetable->stats.mapped -= range;
 
-	mb();
+	/* Post all writes to the pagetable */
+	wmb();
+
 	spin_unlock(&pagetable->lock);
 
 	gen_pool_free(pagetable->pool, gpuaddr, range);

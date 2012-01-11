@@ -33,31 +33,13 @@
 #define GSL_RB_USE_MEM_TIMESTAMP
 #define GSL_DEVICE_SHADOW_MEMSTORE_TO_USER
 
-/* ringbuffer sizes log2quadword */
-#define GSL_RB_SIZE_8		0
-#define GSL_RB_SIZE_16		1
-#define GSL_RB_SIZE_32		2
-#define GSL_RB_SIZE_64		3
-#define GSL_RB_SIZE_128		4
-#define GSL_RB_SIZE_256		5
-#define GSL_RB_SIZE_512		6
-#define GSL_RB_SIZE_1K  	7
-#define GSL_RB_SIZE_2K  	8
-#define GSL_RB_SIZE_4K  	9
-#define GSL_RB_SIZE_8K  	10
-#define GSL_RB_SIZE_16K 	11
-#define GSL_RB_SIZE_32K 	12
-#define GSL_RB_SIZE_64K 	13
-#define GSL_RB_SIZE_128K	14
-#define GSL_RB_SIZE_256K	15
-#define GSL_RB_SIZE_512K	16
-#define GSL_RB_SIZE_1M		17
-#define GSL_RB_SIZE_2M		18
-#define GSL_RB_SIZE_4M		19
+/*
+ * Adreno ringbuffer sizes in bytes - these are converted to
+ * the appropriate log2 values in the code
+ */
 
-/* Yamato ringbuffer config*/
-static const unsigned int kgsl_cfg_rb_sizelog2quadwords = GSL_RB_SIZE_32K;
-static const unsigned int kgsl_cfg_rb_blksizequadwords  = GSL_RB_SIZE_16;
+#define KGSL_RB_SIZE (32 * 1024)
+#define KGSL_RB_BLKSIZE 16
 
 /* CP timestamp register */
 #define	REG_CP_TIMESTAMP		 REG_SCRATCH_REG0
@@ -89,7 +71,6 @@ struct kgsl_ringbuffer {
 
 	/*ringbuffer size */
 	unsigned int sizedwords;
-	unsigned int blksizequadwords;
 
 	unsigned int wptr; /* write pointer offset in dwords from baseaddr */
 	unsigned int rptr; /* read pointer offset in dwords from baseaddr */
@@ -101,11 +82,11 @@ struct kgsl_ringbuffer {
 
 #define GSL_RB_WRITE(ring, gpuaddr, data) \
 	do { \
-		writel(data, ring); \
+		writel_relaxed(data, ring); \
+		wmb(); \
 		kgsl_cffdump_setmem(gpuaddr, data, 4); \
 		ring++; \
 		gpuaddr += sizeof(uint); \
-		wmb(); \
 	} while (0)
 
 /* timestamp */
@@ -130,8 +111,7 @@ struct kgsl_ringbuffer {
 #define GSL_RB_CNTL_NO_UPDATE 0x0 /* enable */
 #define GSL_RB_GET_READPTR(rb, data) \
 	do { \
-		*(data) = readl(&(rb)->memptrs->rptr); \
-		rmb(); \
+		*(data) = readl_relaxed(&(rb)->memptrs->rptr); \
 	} while (0)
 #else
 #define GSL_RB_CNTL_NO_UPDATE 0x1 /* disable */
@@ -141,15 +121,7 @@ struct kgsl_ringbuffer {
 	} while (0)
 #endif /* GSL_RB_USE_MEMRPTR */
 
-/* wptr polling */
-#ifdef GSL_RB_USE_WPTR_POLLING
-#define GSL_RB_CNTL_POLL_EN 0x1 /* enable */
-#define GSL_RB_UPDATE_WPTR_POLLING(rb) \
-	do { writel((rb)->wptr, &((rb)->memptrs->wptr_poll)); } while (0)
-#else
 #define GSL_RB_CNTL_POLL_EN 0x0 /* disable */
-#define GSL_RB_UPDATE_WPTR_POLLING(rb)
-#endif	/* GSL_RB_USE_WPTR_POLLING */
 
 int kgsl_ringbuffer_issueibcmds(struct kgsl_device_private *dev_priv,
 				struct kgsl_context *context,

@@ -325,7 +325,7 @@ void kgsl_cffdump_init()
 	cpumask_t mask;
 
 	cpumask_clear(&mask);
-	cpumask_set_cpu(1, &mask);
+	cpumask_set_cpu(0, &mask);
 	sched_setaffinity(0, &mask);
 #endif
 	if (!debugfs_dir || IS_ERR(debugfs_dir)) {
@@ -435,7 +435,7 @@ void kgsl_cffdump_syncmem(struct kgsl_device_private *dev_priv,
 		/* Ensure that this memory region is not read from the
 		 * cache but fetched fresh */
 
-		dsb(); wmb(); mb();
+		mb();
 
 		kgsl_cache_range_op(memdesc->hostptr, memdesc->size,
 				    memdesc->type, KGSL_CACHE_OP_INV);
@@ -608,8 +608,8 @@ bool kgsl_cffdump_parse_ibs(struct kgsl_device_private *dev_priv,
 	if (!memdesc->physaddr) {
 		KGSL_CORE_ERR("no physaddr");
 		return true;
-	else {
-		dsb(); wmb(); mb();
+	} else {
+		mb();
 		kgsl_cache_range_op(memdesc->hostptr, memdesc->size,
 				    memdesc->type, KGSL_CACHE_OP_INV);
 	}

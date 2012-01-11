@@ -243,7 +243,6 @@ static void kgsl_memqueue_freememontimestamp(struct kgsl_device *device,
 static void kgsl_memqueue_drain(struct kgsl_device *device)
 {
 	struct kgsl_mem_entry *entry, *entry_tmp;
-	struct kgsl_event *event, *event_tmp;
 	uint32_t ts_processed;
 
 	BUG_ON(!mutex_is_locked(&device->mutex));
@@ -1767,7 +1766,7 @@ static const struct {
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_CFF_USER_EVENT,
 			kgsl_ioctl_cff_user_event, 0),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_TIMESTAMP_EVENT,
-			kgsl_ioctl_timestamp_event, 0),
+			kgsl_ioctl_timestamp_event, 1),
 };
 
 static long kgsl_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
@@ -1874,6 +1873,17 @@ kgsl_mmap_memstore(struct kgsl_device *device, struct vm_area_struct *vma)
 	return result;
 }
 
+/*
+ * kgsl_gpumem_vm_open is called whenever a vma region is copied or split.
+ * Increase the refcount to make sure that the accounting stays correct
+ */
+
+static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
+{
+	struct kgsl_mem_entry *entry = vma->vm_private_data;
+	kgsl_mem_entry_get(entry);
+}
+
 static int
 kgsl_gpumem_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
@@ -1893,6 +1903,7 @@ kgsl_gpumem_vm_close(struct vm_area_struct *vma)
 }
 
 static struct vm_operations_struct kgsl_gpumem_vm_ops = {
+	.open  = kgsl_gpumem_vm_open,
 	.fault = kgsl_gpumem_vm_fault,
 	.close = kgsl_gpumem_vm_close,
 };
