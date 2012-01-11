@@ -785,7 +785,7 @@ static void handle_setup(struct usb_info *ui)
 	 * This results in fetching wrong setup_data sometimes.
 	 * TODO: Remove below workaround of adding 1us delay once
 	 * it gets fixed in hardware.
-	 */
+	*/
 	udelay(10);
 
 	memcpy(&ctl, ui->ep0out.head->setup_data, sizeof(ctl));
