@@ -34,8 +34,8 @@ struct panel_info {
 	int vsync_gpio;
 };
 
-static struct platform_device mddi_renesas_backlight = {
-	.name = "renesas_backlight",
+static struct platform_device mddi_renesas_cabc = {
+	.name = "chacha-backlight",
 	.id = 0,
 };
 
@@ -93,7 +93,7 @@ static int renesas_suspend(struct msm_panel_data *panel_data)
 	ret = bridge_data->uninit(bridge_data, client_data);
 	wake_unlock(&panel->idle_lock);
 	if (ret) {
-		PR_DISP_INFO( "mddi renesas client: non zero return from "
+		PR_DISP_INFO("mddi renesas client: non zero return from "
 			"uninit\n");
 		return ret;
 	}
@@ -184,7 +184,7 @@ static int setup_vsync(struct panel_info *panel,
 			  "vsync", panel);
 	if (ret)
 		goto err_request_irq_failed;
-	PR_DISP_INFO( "vsync on gpio %d now %d\n",
+	PR_DISP_INFO("vsync on gpio %d now %d\n",
 	       gpio, gpio_get_value(gpio));
 	return 0;
 
@@ -208,21 +208,20 @@ static int mddi_renesas_probe(struct platform_device *pdev)
 	struct panel_info *panel =
 		kzalloc(sizeof(struct panel_info), GFP_KERNEL);
 
+	PR_DISP_DEBUG("%s\n", __func__);
+
 	if (!panel)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, panel);
 
-	PR_DISP_DEBUG("%s\n", __func__);
-
-	mddi_renesas_backlight.dev.platform_data = client_data;
-	platform_device_register(&mddi_renesas_backlight);
+	if (panel_data->caps & MSMFB_CAP_CABC) {
+		PR_DISP_INFO("CABC enabled\n");
+		mddi_renesas_cabc.dev.platform_data = client_data;
+		platform_device_register(&mddi_renesas_cabc);
+	}
 
 	if (panel_data->vsync_gpio == 0)
-#if defined(CONFIG_ARCH_MSM7X30)
-		panel->vsync_gpio = 30;
-#else
-		panel->vsync_gpio = 98;
-#endif
+		panel->vsync_gpio = 97;
 	else
 		panel->vsync_gpio = panel_data->vsync_gpio;
 
@@ -261,15 +260,15 @@ static int mddi_renesas_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver mddi_client_b9f6_61408 = {
+static struct platform_driver mddi_client_0000_1531 = {
 	.probe = mddi_renesas_probe,
 	.remove = mddi_renesas_remove,
-	.driver = { .name = "mddi_renesas_b9f6_61408" },
+	.driver = { .name = "mddi_renesas_0000_1531" },
 };
 
 static int __init mddi_client_renesas_init(void)
 {
-	platform_driver_register(&mddi_client_b9f6_61408);
+	platform_driver_register(&mddi_client_0000_1531);
 	return 0;
 }
 

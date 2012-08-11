@@ -22,38 +22,38 @@
 #include <mach/msm_fb.h>
 #include <mach/debug_display.h>
 
-static DECLARE_WAIT_QUEUE_HEAD(renesas_vsync_wait);
+static DECLARE_WAIT_QUEUE_HEAD(samsung_vsync_wait);
 
 struct panel_info {
 	struct msm_mddi_client_data *client_data;
 	struct platform_device pdev;
 	struct msm_panel_data panel_data;
-	struct msmfb_callback *renesas_callback;
+	struct msmfb_callback *samsung_callback;
 	struct wake_lock idle_lock;
-	int renesas_got_int;
+	int samsung_got_int;
 	int vsync_gpio;
 };
 
-static struct platform_device mddi_renesas_backlight = {
-	.name = "renesas_backlight",
+static struct platform_device mddi_samsung_cabc = {
+	.name = "icong-backlight",
 	.id = 0,
 };
 
-static void renesas_request_vsync(struct msm_panel_data *panel_data,
+static void samsung_request_vsync(struct msm_panel_data *panel_data,
 				  struct msmfb_callback *callback)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
 	struct msm_mddi_client_data *client_data = panel->client_data;
 
-	panel->renesas_callback = callback;
-	if (panel->renesas_got_int) {
-		panel->renesas_got_int = 0;
+	panel->samsung_callback = callback;
+	if (panel->samsung_got_int) {
+		panel->samsung_got_int = 0;
 		client_data->activate_link(client_data);
 	}
 }
 
-static void renesas_clear_vsync(struct msm_panel_data *panel_data)
+static void samsung_clear_vsync(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
@@ -62,24 +62,24 @@ static void renesas_clear_vsync(struct msm_panel_data *panel_data)
 	client_data->activate_link(client_data);
 }
 
-static void renesas_wait_vsync(struct msm_panel_data *panel_data)
+static void samsung_wait_vsync(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
 	struct msm_mddi_client_data *client_data = panel->client_data;
 
-	if (panel->renesas_got_int) {
-		panel->renesas_got_int = 0;
+	if (panel->samsung_got_int) {
+		panel->samsung_got_int = 0;
 		client_data->activate_link(client_data); /* clears interrupt */
 	}
-	if (wait_event_timeout(renesas_vsync_wait, panel->renesas_got_int,
+	if (wait_event_timeout(samsung_vsync_wait, panel->samsung_got_int,
 				HZ/2) == 0)
 		PR_DISP_ERR("timeout waiting for VSYNC\n");
-	panel->renesas_got_int = 0;
+	panel->samsung_got_int = 0;
 	/* interrupt clears when screen dma starts */
 }
 
-static int renesas_suspend(struct msm_panel_data *panel_data)
+static int samsung_suspend(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
@@ -93,7 +93,7 @@ static int renesas_suspend(struct msm_panel_data *panel_data)
 	ret = bridge_data->uninit(bridge_data, client_data);
 	wake_unlock(&panel->idle_lock);
 	if (ret) {
-		PR_DISP_INFO( "mddi renesas client: non zero return from "
+		PR_DISP_INFO("mddi samsung client: non zero return from "
 			"uninit\n");
 		return ret;
 	}
@@ -101,7 +101,7 @@ static int renesas_suspend(struct msm_panel_data *panel_data)
 	return 0;
 }
 
-static int renesas_resume(struct msm_panel_data *panel_data)
+static int samsung_resume(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
@@ -120,7 +120,7 @@ static int renesas_resume(struct msm_panel_data *panel_data)
 	return 0;
 }
 
-static int renesas_blank(struct msm_panel_data *panel_data)
+static int samsung_blank(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
@@ -131,7 +131,7 @@ static int renesas_blank(struct msm_panel_data *panel_data)
 	return bridge_data->blank(bridge_data, client_data);
 }
 
-static int renesas_unblank(struct msm_panel_data *panel_data)
+static int samsung_unblank(struct msm_panel_data *panel_data)
 {
 	struct panel_info *panel = container_of(panel_data, struct panel_info,
 						panel_data);
@@ -142,16 +142,16 @@ static int renesas_unblank(struct msm_panel_data *panel_data)
 	return bridge_data->unblank(bridge_data, client_data);
 }
 
-static irqreturn_t renesas_vsync_interrupt(int irq, void *data)
+static irqreturn_t samsung_vsync_interrupt(int irq, void *data)
 {
 	struct panel_info *panel = data;
 
-	panel->renesas_got_int = 1;
-	if (panel->renesas_callback) {
-		panel->renesas_callback->func(panel->renesas_callback);
-		panel->renesas_callback = 0;
+	panel->samsung_got_int = 1;
+	if (panel->samsung_callback) {
+		panel->samsung_callback->func(panel->samsung_callback);
+		panel->samsung_callback = 0;
 	}
-	wake_up(&renesas_vsync_wait);
+	wake_up(&samsung_vsync_wait);
 	return IRQ_HANDLED;
 }
 
@@ -180,11 +180,11 @@ static int setup_vsync(struct panel_info *panel,
 
 	register_gpio_int_mask(gpio, 1);
 
-	ret = request_irq(irq, renesas_vsync_interrupt, IRQF_TRIGGER_RISING,
+	ret = request_irq(irq, samsung_vsync_interrupt, IRQF_TRIGGER_RISING,
 			  "vsync", panel);
 	if (ret)
 		goto err_request_irq_failed;
-	PR_DISP_INFO( "vsync on gpio %d now %d\n",
+	PR_DISP_INFO("vsync on gpio %d now %d\n",
 	       gpio, gpio_get_value(gpio));
 	return 0;
 
@@ -198,7 +198,7 @@ err_request_gpio_failed:
 	return ret;
 }
 
-static int mddi_renesas_probe(struct platform_device *pdev)
+static int mddi_samsung_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct msm_mddi_client_data *client_data = pdev->dev.platform_data;
@@ -208,21 +208,20 @@ static int mddi_renesas_probe(struct platform_device *pdev)
 	struct panel_info *panel =
 		kzalloc(sizeof(struct panel_info), GFP_KERNEL);
 
+	PR_DISP_DEBUG("%s\n", __func__);
+
 	if (!panel)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, panel);
 
-	PR_DISP_DEBUG("%s\n", __func__);
-
-	mddi_renesas_backlight.dev.platform_data = client_data;
-	platform_device_register(&mddi_renesas_backlight);
+	if (panel_data->caps & MSMFB_CAP_CABC) {
+		PR_DISP_INFO("CABC enabled\n");
+		mddi_samsung_cabc.dev.platform_data = client_data;
+		platform_device_register(&mddi_samsung_cabc);
+	}
 
 	if (panel_data->vsync_gpio == 0)
-#if defined(CONFIG_ARCH_MSM7X30)
-		panel->vsync_gpio = 30;
-#else
-		panel->vsync_gpio = 98;
-#endif
+		panel->vsync_gpio = 97;
 	else
 		panel->vsync_gpio = panel_data->vsync_gpio;
 
@@ -232,13 +231,13 @@ static int mddi_renesas_probe(struct platform_device *pdev)
 		return ret;
 	}
 	panel->client_data = client_data;
-	panel->panel_data.suspend = renesas_suspend;
-	panel->panel_data.resume = renesas_resume;
-	panel->panel_data.wait_vsync = renesas_wait_vsync;
-	panel->panel_data.request_vsync = renesas_request_vsync;
-	panel->panel_data.clear_vsync = renesas_clear_vsync;
-	panel->panel_data.blank = renesas_blank;
-	panel->panel_data.unblank = renesas_unblank;
+	panel->panel_data.suspend = samsung_suspend;
+	panel->panel_data.resume = samsung_resume;
+	panel->panel_data.wait_vsync = samsung_wait_vsync;
+	panel->panel_data.request_vsync = samsung_request_vsync;
+	panel->panel_data.clear_vsync = samsung_clear_vsync;
+	panel->panel_data.blank = samsung_blank;
+	panel->panel_data.unblank = samsung_unblank;
 	panel->panel_data.fb_data =  &bridge_data->fb_data;
 	panel->panel_data.caps = MSMFB_CAP_PARTIAL_UPDATES;
 	panel->pdev.name = "msm_panel";
@@ -247,12 +246,12 @@ static int mddi_renesas_probe(struct platform_device *pdev)
 	panel->pdev.num_resources = 1;
 	panel->pdev.dev.platform_data = &panel->panel_data;
 	platform_device_register(&panel->pdev);
-	wake_lock_init(&panel->idle_lock, WAKE_LOCK_IDLE, "renesas_idle_lock");
+	wake_lock_init(&panel->idle_lock, WAKE_LOCK_IDLE, "samsung_idle_lock");
 
 	return 0;
 }
 
-static int mddi_renesas_remove(struct platform_device *pdev)
+static int mddi_samsung_remove(struct platform_device *pdev)
 {
 	struct panel_info *panel = platform_get_drvdata(pdev);
 
@@ -261,17 +260,16 @@ static int mddi_renesas_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver mddi_client_b9f6_61408 = {
-	.probe = mddi_renesas_probe,
-	.remove = mddi_renesas_remove,
-	.driver = { .name = "mddi_renesas_b9f6_61408" },
+static struct platform_driver mddi_client_0101_05a0 = {
+	.probe = mddi_samsung_probe,
+	.remove = mddi_samsung_remove,
+	.driver = { .name = "mddi_c_0101_05a0" },
 };
 
-static int __init mddi_client_renesas_init(void)
+static int __init mddi_client_samsung_init(void)
 {
-	platform_driver_register(&mddi_client_b9f6_61408);
-	return 0;
+	return platform_driver_register(&mddi_client_0101_05a0);
 }
 
-module_init(mddi_client_renesas_init);
+module_init(mddi_client_samsung_init);
 

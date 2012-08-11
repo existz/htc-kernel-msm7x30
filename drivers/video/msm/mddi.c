@@ -49,9 +49,6 @@ static uint32_t mddi_debug_flags;
 #ifdef CONFIG_MSM_MDP40
 static struct clk *mdp_clk;
 #endif
-#ifdef CONFIG_MDP4_HW_VSYNC
-static struct clk *mdp_vsync_clk;
-#endif
 union mddi_rev {
 	unsigned char raw[MDDI_REV_BUFFER_SIZE];
 	struct mddi_rev_packet hdr;
@@ -363,7 +360,7 @@ static irqreturn_t mddi_isr(int irq, void *data)
 static long mddi_wait_interrupt_timeout(struct mddi_info *mddi,
 					uint32_t intmask, int timeout)
 {
-	unsigned long irq_flags = 0;
+	unsigned long irq_flags=0;
 
 	spin_lock_irqsave(&mddi->int_lock, irq_flags);
 	mddi->got_int &= ~intmask;
@@ -442,7 +439,7 @@ static uint16_t mddi_init_registers(struct mddi_info *mddi)
 	else
 		mddi_writel(0xa850f, PAD_CTL);
 
-#if defined(CONFIG_ARCH_QSD8X50) || defined(CONFIG_ARCH_MSM7X30)
+#if defined (CONFIG_ARCH_QSD8X50) || defined (CONFIG_ARCH_MSM7X30)
 	/* Only for novatek driver IC*/
 	mddi_writel(0x00C8, DRIVE_HI);
 	/* 0x32 normal, 0x50 for Toshiba display */
@@ -487,9 +484,6 @@ static void mddi_suspend(struct msm_mddi_client_data *cdata)
 	mddi_wait_interrupt(mddi, MDDI_INT_NO_CMD_PKTS_PEND);
 	/* turn off the clock */
 	clk_disable(mddi->clk);
-#ifdef CONFIG_MDP4_HW_VSYNC
-	clk_disable(mdp_vsync_clk);
-#endif
 #ifdef CONFIG_MSM_MDP40
 	clk_disable(mdp_clk);
 #endif
@@ -508,9 +502,6 @@ static void mddi_resume(struct msm_mddi_client_data *cdata)
 		mddi->power_client(&mddi->client_data, 1);
 #ifdef CONFIG_MSM_MDP40
 	clk_enable(mdp_clk);
-#endif
-#ifdef CONFIG_MDP4_HW_VSYNC
-	clk_enable(mdp_vsync_clk);
 #endif
 	/* turn on the clock */
 	clk_enable(mddi->clk);
@@ -641,7 +632,7 @@ int mddi_check_status(struct mddi_info *mddi)
  * jay, Nov 13, 08'
  * extend the single parameter to multiple.
  */
-static void _mddi_remote_write_vals(struct msm_mddi_client_data *cdata, uint8_t *val,
+void mddi_remote_write_vals(struct msm_mddi_client_data *cdata, uint8_t * val,
 			uint32_t reg, unsigned int nr_bytes)
 {
 	struct mddi_info *mddi = container_of(cdata, struct mddi_info,
@@ -686,7 +677,6 @@ static void _mddi_remote_write_vals(struct msm_mddi_client_data *cdata, uint8_t 
 		}
 		if (dma_retry == 0) {
 			PR_DISP_ERR("%s: dma map fail!\n", __func__);
-			mutex_unlock(&mddi->reg_write_lock);
 			return;
 		}
 
@@ -704,23 +694,14 @@ static void _mddi_remote_write_vals(struct msm_mddi_client_data *cdata, uint8_t 
 	mutex_unlock(&mddi->reg_write_lock);
 }
 
-void mddi_remote_write_vals(struct msm_mddi_client_data *cdata, uint8_t *val,
-			uint32_t reg, unsigned int nr_bytes)
-{
-	int sem_owned = overlay_semaphore_lock();
-	_mddi_remote_write_vals(cdata, val, reg, nr_bytes);
-	if (sem_owned == 0)
-		overlay_semaphore_unlock();
-}
-
 void mddi_remote_write(struct msm_mddi_client_data *cdata, uint32_t val,
 			uint32_t reg)
 {
-	uint8_t *p = (uint8_t *)&val;
+	uint8_t * p = (uint8_t *)&val;
 	mddi_remote_write_vals(cdata, p, reg, 4);
 }
 
-static uint32_t _mddi_remote_read(struct msm_mddi_client_data *cdata, uint32_t reg)
+uint32_t mddi_remote_read(struct msm_mddi_client_data *cdata, uint32_t reg)
 {
 	struct mddi_info *mddi = container_of(cdata, struct mddi_info,
 					      client_data);
@@ -729,7 +710,7 @@ static uint32_t _mddi_remote_read(struct msm_mddi_client_data *cdata, uint32_t r
 	struct reg_read_info ri;
 	unsigned s;
 	int retry_count = 2;
-	unsigned long irq_flags = 0;
+	unsigned long irq_flags=0;
 
 	mutex_lock(&mddi->reg_read_lock);
 
@@ -814,18 +795,6 @@ static uint32_t _mddi_remote_read(struct msm_mddi_client_data *cdata, uint32_t r
 	return ri.result;
 }
 
-uint32_t mddi_remote_read(struct msm_mddi_client_data *cdata, uint32_t reg)
-{
-	uint32_t rtn_value;
-
-	int sem_owned = overlay_semaphore_lock();
-	rtn_value = _mddi_remote_read(cdata, reg);
-	if (sem_owned == 0)
-		overlay_semaphore_unlock();
-
-	return rtn_value;
-}
-
 /*FIXME: workaround for Novatek*/
 void mddi_send_powerdown(struct msm_mddi_client_data *cdata)
 {
@@ -851,16 +820,6 @@ static int __init mddi_clk_setup(struct platform_device *pdev,
 		return PTR_ERR(mdp_clk);
 	}
 	ret =  clk_enable(mdp_clk);
-	if (ret)
-		goto fail;
-#endif
-#ifdef CONFIG_MDP4_HW_VSYNC
-	mdp_vsync_clk = clk_get(&pdev->dev, "mdp_vsync_clk");
-	if (IS_ERR(mdp_vsync_clk)) {
-		PR_DISP_INFO("mddi: failed to get mdp_vsync_clk");
-		return PTR_ERR(mdp_vsync_clk);
-	}
-	ret =  clk_enable(mdp_vsync_clk);
 	if (ret)
 		goto fail;
 #endif
@@ -919,37 +878,38 @@ static void mddi_skew_calibration(struct mddi_info *mddi)
 
 static ssize_t mddi_reg_open(struct inode *inode, struct file *file)
 {
-	file->private_data = inode->i_private;
-	return 0;
+        file->private_data = inode->i_private;
+        return 0;
 }
 
-static ssize_t mddi_reg_read(struct file *file, char __user *user_buf, size_t count, loff_t *ppos)
+static ssize_t mddi_reg_read(struct file *file, char __user *user_buf,
+                size_t count, loff_t *ppos)
 {
-	struct mddi_info *mddi = (struct mddi_info *)file->private_data;
+        struct mddi_info *mddi = (struct mddi_info*)file->private_data;
 
-	return simple_read_from_buffer(user_buf, count, ppos, mddi->debugfs_buf, strlen(mddi->debugfs_buf));
+        return simple_read_from_buffer(user_buf, count, ppos, mddi->debugfs_buf, strlen(mddi->debugfs_buf));
 }
 
 static ssize_t mddi_reg_write(struct file *file, const char __user *user_buf,
 		size_t count, loff_t *ppos)
 {
-	unsigned int reg, data;
+        unsigned int reg, data;
 	char debug_buf[32], type;
-	int cnt, len;
+        int cnt, len;
 	struct mddi_info *mddi = file->private_data;
 
 	memset(debug_buf, 0x00, sizeof(debug_buf));
 
-	if (count >= sizeof(debug_buf))
-			return -EFAULT;
+        if (count >= sizeof(debug_buf))
+                return -EFAULT;
 
-	if (copy_from_user(debug_buf, user_buf, count))
-			return -EFAULT;
+        if (copy_from_user(debug_buf, user_buf, count))
+                return -EFAULT;
 
-	debug_buf[count] = 0;   /* end of string */
+        debug_buf[count] = 0;   /* end of string */
 
 	if (debug_buf[0] == 'w') {
-		cnt = sscanf(debug_buf, "%c %x %x", &type, &reg, &data);
+		cnt = sscanf(debug_buf, "%c %x %x", &type ,&reg, &data);
 		mddi_set_auto_hibernate(&mddi->client_data, 0);
 		mddi_remote_write(&mddi->client_data, data, reg);
 		mddi_set_auto_hibernate(&mddi->client_data, 1);
@@ -958,7 +918,7 @@ static ssize_t mddi_reg_write(struct file *file, const char __user *user_buf,
 			 "[W] reg=0x%x val=0x%x\n", reg, data);
 		PR_DISP_INFO("%s: reg=%x val=%x\n", __func__, reg, data);
 	} else {
-		cnt = sscanf(debug_buf, "%c %x", &type, &reg);
+		cnt = sscanf(debug_buf, "%c %x", &type ,&reg);
 
 		len = snprintf(mddi->debugfs_buf, sizeof(mddi->debugfs_buf),
 			 "[R] reg=0x%x val=0x%x\n", reg,
@@ -968,29 +928,29 @@ static ssize_t mddi_reg_write(struct file *file, const char __user *user_buf,
 		mddi_remote_read(&mddi->client_data, reg), debug_buf);
 	}
 
-	return count;
+        return count;
 }
 
 static struct file_operations mddi_reg_debugfs_fops[] = {
-	{
+        {
 		.open  = mddi_reg_open,
 		.read = mddi_reg_read,
 		.write = mddi_reg_write,
-	}
+        }
 };
 
 int mddi_reg_debugfs_init(struct mddi_info *mddi)
 {
 	struct dentry *mddi_reg_dent;
 
-	mddi_reg_dent = debugfs_create_dir("mddi", 0);
-	if (IS_ERR(mddi_reg_dent))
-			return PTR_ERR(mddi_reg_dent);
+        mddi_reg_dent = debugfs_create_dir("mddi", 0);
+        if (IS_ERR(mddi_reg_dent))
+                return PTR_ERR(mddi_reg_dent);
 
-	debugfs_create_file("reg", 0600, mddi_reg_dent, mddi,
-			&mddi_reg_debugfs_fops[0]);
+        debugfs_create_file("reg", 0666, mddi_reg_dent, mddi,
+                &mddi_reg_debugfs_fops[0]);
 
-	return 0;
+        return 0;
 }
 
 static int mddi_probe(struct platform_device *pdev)
@@ -1084,10 +1044,14 @@ static int mddi_probe(struct platform_device *pdev)
 
 	mddi_set_auto_hibernate(&mddi->client_data, 1);
 
-	/*
+	/* 
 	 * FIXME: User kernel defconfig to link dedicated mddi client driver.
 	 */
-	if (mddi->caps.Mfr_Name == 0)
+#if 0
+	if ( mddi->caps.Mfr_Name == 0 && mddi->caps.Product_Code == 0)
+#else
+	if (mddi->caps.Mfr_Name == 0 )
+#endif
 		pdata->fixup(&mddi->caps.Mfr_Name, &mddi->caps.Product_Code);
 
 	mddi->client_pdev.id = 0;
@@ -1176,7 +1140,7 @@ static int set_reg(const char *val, struct kernel_param *kp)
 
 	if (!val)
 		return -EINVAL;
-	l = strict_strtoul(val, &endp, 0);
+	l = simple_strtoul(val, &endp, 0);
 	if (endp == val || ((uint32_t)l != l))
 		return -EINVAL;
 	mddi_remote_write(kp->arg, l, selected_register);
