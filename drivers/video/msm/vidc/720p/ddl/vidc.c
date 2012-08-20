@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,16 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
 #include <linux/unistd.h>
+#include <media/msm/vidc_type.h>
 #include "vidc.h"
-#include "vidc_type.h"
 
 #if DEBUG
 #define DBG(x...) printk(KERN_DEBUG x)
@@ -227,6 +222,9 @@ u32 vidc_720p_engine_reset(u32 ch_id,
 
 	/*Sets the DMA endianness */
 	VIDC_IO_OUT(REG_736316, dma_endian);
+
+	/*Restore ARM endianness */
+	VIDC_IO_OUT(REG_215724, 0);
 
 	/* retun engine reset success */
 	return true ;

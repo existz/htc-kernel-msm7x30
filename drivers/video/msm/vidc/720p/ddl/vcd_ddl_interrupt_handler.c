@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,14 +9,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
-#include "vidc_type.h"
+#include <media/msm/vidc_type.h>
 #include "vidc.h"
 #include "vcd_ddl_utils.h"
 #include "vcd_ddl_metadata.h"
@@ -235,6 +230,14 @@ static u32 ddl_header_done_callback(struct ddl_context *ddl_context)
 	ddl_calculate_stride(&decoder->frame_size,
 			!decoder->progressive_only,
 			decoder->codec.codec);
+	if (decoder->buf_format.buffer_format == VCD_BUFFER_FORMAT_TILE_4x2) {
+		decoder->frame_size.stride =
+		DDL_TILE_ALIGN(decoder->frame_size.width,
+					DDL_TILE_ALIGN_WIDTH);
+		decoder->frame_size.scan_lines =
+			DDL_TILE_ALIGN(decoder->frame_size.height,
+						 DDL_TILE_ALIGN_HEIGHT);
+	}
 	if (seq_hdr_info.crop_exists)	{
 		decoder->frame_size.width -=
 		(seq_hdr_info.crop_right_offset
@@ -287,13 +290,14 @@ static u32 ddl_header_done_callback(struct ddl_context *ddl_context)
 			decoder->client_output_buf_req.actual_count
 			&& decoder->progressive_only)
 			need_reconfig = false;
-		if ((input_vcd_frm->data_len == seq_hdr_info.dec_frm_size ||
+		if ((input_vcd_frm->data_len <= seq_hdr_info.dec_frm_size ||
 			 (input_vcd_frm->flags & VCD_FRAME_FLAG_CODECCONFIG)) &&
 			(!need_reconfig ||
 			 !(input_vcd_frm->flags & VCD_FRAME_FLAG_EOS))) {
 			input_vcd_frm->flags |=
 				VCD_FRAME_FLAG_CODECCONFIG;
 			seq_hdr_only_frame = true;
+			input_vcd_frm->data_len = 0;
 			ddl->input_frame.frm_trans_end = !need_reconfig;
 			ddl_context->ddl_callback(
 				VCD_EVT_RESP_INPUT_DONE,

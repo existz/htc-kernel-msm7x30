@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,17 +9,13 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
-#include "vidc_type.h"
+#include <media/msm/vidc_type.h>
 #include "vcd_power_sm.h"
 #include "vcd_core.h"
 #include "vcd.h"
+#include "vcd_res_tracker.h"
 
 u32 vcd_power_event(
 	struct vcd_dev_ctxt *dev_ctxt,
@@ -296,6 +292,40 @@ u32 vcd_set_perf_level(struct vcd_dev_ctxt *dev_ctxt, u32 perf_lvl)
 		}
 
 	} else {
+		dev_ctxt->set_perf_lvl_pending = true;
+	}
+
+	return rc;
+}
+
+u32 vcd_set_perf_turbo_level(struct vcd_clnt_ctxt *cctxt)
+{
+	u32 rc = VCD_S_SUCCESS;
+#ifdef CONFIG_MSM_BUS_SCALING
+	struct vcd_dev_ctxt *dev_ctxt = cctxt->dev_ctxt;
+	pr_err("\n Setting Turbo mode !!");
+
+	if (res_trk_update_bus_perf_level(dev_ctxt,
+			RESTRK_1080P_TURBO_PERF_LEVEL) < 0) {
+		pr_err("\n %s(): update buf perf level failed\n",
+			__func__);
+		return false;
+	}
+	dev_ctxt->curr_perf_lvl = RESTRK_1080P_TURBO_PERF_LEVEL;
+	vcd_update_decoder_perf_level(dev_ctxt, RESTRK_1080P_TURBO_PERF_LEVEL);
+#endif
+	return rc;
+}
+
+u32 vcd_update_decoder_perf_level(struct vcd_dev_ctxt *dev_ctxt, u32 perf_lvl)
+{
+	u32 rc = VCD_S_SUCCESS;
+
+	if (res_trk_set_perf_level(perf_lvl,
+		&dev_ctxt->curr_perf_lvl, dev_ctxt)) {
+		dev_ctxt->set_perf_lvl_pending = false;
+	} else {
+		rc = VCD_ERR_FAIL;
 		dev_ctxt->set_perf_lvl_pending = true;
 	}
 
