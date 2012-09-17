@@ -53,7 +53,7 @@ obj-$(CONFIG_FB_MSM_TVOUT) += tvenc.o tvfb.o
 
 obj-$(CONFIG_MSM_HDMI_COMMON) += hdmi_common.o
 
-obj-$(CONFIG_MSM_HDMI) += hdmi/
+obj-$(CONFIG_MSM_VIDC_1080P) += vidc/
 obj-$(CONFIG_MSM_VIDC_720P) += vidc/
 
 obj-$(CONFIG_MSM_HDMI_MHL) += mhl/

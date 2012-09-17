@@ -1,35 +1,20 @@
-/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- *       copyright notice, this list of conditions and the following
- *       disclaimer in the documentation and/or other materials provided
- *       with the distribution.
- *     * Neither the name of Code Aurora Forum, Inc. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
  *
- * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
- * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
- * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
- * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
- * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  */
 #ifndef _VCD_CORE_H_
 #define _VCD_CORE_H_
 
-#include "vcd_api.h"
+#include <linux/ion.h>
+#include <media/msm/vcd_api.h>
 #include "vcd_ddl_api.h"
 
 #include "vcd_util.h"
@@ -76,8 +61,8 @@ enum vcd_command {
 };
 
 enum vcd_core_type {
-	VCD_CORE_1080P,
-	VCD_CORE_720P,
+    VCD_CORE_1080P,
+    VCD_CORE_720P
 };
 
 struct vcd_cmd_q_element {
@@ -161,7 +146,7 @@ struct vcd_dev_ctxt {
 	u32 reqd_perf_lvl;
 	u32 curr_perf_lvl;
 	u32 set_perf_lvl_pending;
-
+	u32 turbo_mode_set;
 };
 
 struct vcd_clnt_status {
@@ -172,7 +157,7 @@ struct vcd_clnt_status {
 	u32 int_field_cnt;
 	s64 first_ts;
 	s64 prev_ts;
-	u32 time_elapsed;
+	u64 time_elapsed;
 	struct vcd_frame_data eos_trig_ip_frm;
 	struct ddl_frame_data_tag eos_prev_op_frm;
 	u32 eos_prev_op_frm_status;
@@ -205,6 +190,7 @@ struct vcd_clnt_ctxt {
 	u32 frm_p_units;
 	u32 reqd_perf_lvl;
 	u32 time_resoln;
+	u32 time_frame_delta;
 
 	struct vcd_buffer_pool in_buf_pool;
 	struct vcd_buffer_pool out_buf_pool;
@@ -220,9 +206,12 @@ struct vcd_clnt_ctxt {
 	struct vcd_sequence_hdr seq_hdr;
 	u8 *seq_hdr_phy_addr;
 	struct vcd_clnt_status status;
-
+	struct ion_client *vcd_ion_client;
+	u32 vcd_enable_ion;
 	struct vcd_clnt_ctxt *next;
 	u32 meta_mode;
+	int secure;
+	int perf_set_by_client;
 };
 
 #define VCD_BUFFERPOOL_INUSE_DECREMENT(val) \

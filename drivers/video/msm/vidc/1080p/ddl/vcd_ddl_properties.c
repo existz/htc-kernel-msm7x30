@@ -9,15 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
 #include "vcd_ddl.h"
 #include "vcd_ddl_metadata.h"
+#include "vcd_res_tracker_api.h"
 
 static u32 ddl_set_dec_property(struct ddl_client_context *pddl,
 	struct vcd_property_hdr *property_hdr, void *property_value);
@@ -295,6 +291,11 @@ static u32 ddl_set_dec_property(struct ddl_client_context *ddl,
 		}
 	}
 	break;
+	case VCD_I_SET_TURBO_CLK:
+	{
+		vcd_status = VCD_S_SUCCESS;
+	}
+	break;
 	case VCD_I_BUFFER_FORMAT:
 	{
 		struct vcd_property_buffer_format *tile =
@@ -334,7 +335,7 @@ static u32 ddl_set_dec_property(struct ddl_client_context *ddl,
 			DDL_CLIENT_WAIT_FOR_INITCODEC) ||
 			DDLCLIENT_STATE_IS(ddl, DDL_CLIENT_WAIT_FOR_DPB) ||
 			DDLCLIENT_STATE_IS(ddl, DDL_CLIENT_OPEN))) {
-			phys_addr = mv_buff->physical_addr;
+			phys_addr = mv_buff->dev_addr;
 			virt_addr = mv_buff->kernel_virtual_addr;
 			buffer_size = mv_buff->size/mv_buff->count;
 
@@ -416,6 +417,27 @@ static u32 ddl_set_dec_property(struct ddl_client_context *ddl,
 		}
 	}
 	break;
+	case VCD_I_DISABLE_DMX:
+	{
+		int disable_dmx_allowed = 0;
+		DDL_MSG_LOW("Set property VCD_I_DISABLE_DMX\n");
+		if (res_trk_get_disable_dmx() &&
+			((decoder->codec.codec == VCD_CODEC_H264) ||
+			 (decoder->codec.codec == VCD_CODEC_VC1) ||
+			 (decoder->codec.codec == VCD_CODEC_VC1_RCV)))
+			disable_dmx_allowed = 1;
+
+		if (sizeof(u32) == property_hdr->sz &&
+			DDLCLIENT_STATE_IS(ddl, DDL_CLIENT_OPEN) &&
+			disable_dmx_allowed) {
+				decoder->dmx_disable = *(u32 *)property_value;
+				vcd_status = VCD_S_SUCCESS;
+		}
+	}
+	break;
+	case VCD_REQ_PERF_LEVEL:
+		vcd_status = VCD_S_SUCCESS;
+		break;
 	default:
 		vcd_status = VCD_ERR_ILLEGAL_OP;
 		break;
@@ -858,7 +880,7 @@ static u32 ddl_set_enc_property(struct ddl_client_context *ddl,
 				vcd_property_enc_recon_buffer)) {
 				encoder->hw_bufs.dpb_y[index_hw_bufs].
 				align_physical_addr =
-					recon_buffers->physical_addr;
+					recon_buffers->dev_addr;
 				encoder->hw_bufs.dpb_y[index_hw_bufs].
 				align_virtual_addr =
 					recon_buffers->kernel_virtual_addr;
@@ -866,7 +888,7 @@ static u32 ddl_set_enc_property(struct ddl_client_context *ddl,
 				buffer_size = recon_buffers->buffer_size;
 				encoder->hw_bufs.dpb_c[index_hw_bufs].
 				align_physical_addr =
-				recon_buffers->physical_addr +
+				recon_buffers->dev_addr +
 					ddl_get_yuv_buf_size(
 						encoder->frame_size.width,
 						encoder->frame_size.height,
@@ -901,12 +923,35 @@ static u32 ddl_set_enc_property(struct ddl_client_context *ddl,
 	}
 	case VCD_I_METADATA_ENABLE:
 	case VCD_I_METADATA_HEADER:
-		DDL_MSG_ERROR("Meta Data Interface is Requested");
-		vcd_status = ddl_set_metadata_params(ddl, property_hdr,
-			property_value);
-		vcd_status = VCD_S_SUCCESS;
+		DDL_MSG_LOW("Meta Data Interface is Requested");
+		if (!res_trk_check_for_sec_session()) {
+			vcd_status = ddl_set_metadata_params(ddl,
+				property_hdr, property_value);
+		} else {
+			DDL_MSG_ERROR("Meta Data Interface is not "
+				"supported in secure session");
+			vcd_status = VCD_ERR_ILLEGAL_OP;
+		}
 	break;
 	case VCD_I_META_BUFFER_MODE:
+		vcd_status = VCD_S_SUCCESS;
+		break;
+	case VCD_I_ENABLE_SPS_PPS_FOR_IDR:
+	{
+		struct vcd_property_sps_pps_for_idr_enable *sps_pps =
+		(struct vcd_property_sps_pps_for_idr_enable *) property_value;
+
+		if ((sizeof(struct vcd_property_sps_pps_for_idr_enable)) ==
+		property_hdr->sz) {
+			DDL_MSG_LOW("SPS PPS generation for IDR Encode "
+				"is Requested");
+			encoder->sps_pps.sps_pps_for_idr_enable_flag =
+			sps_pps->sps_pps_for_idr_enable_flag;
+			vcd_status = VCD_S_SUCCESS;
+		}
+		break;
+	}
+	case VCD_REQ_PERF_LEVEL:
 		vcd_status = VCD_S_SUCCESS;
 		break;
 	default:
@@ -1074,6 +1119,18 @@ static u32 ddl_get_dec_property(struct ddl_client_context *ddl,
 	case VCD_I_CONT_ON_RECONFIG:
 		if (sizeof(u32) == property_hdr->sz) {
 			*(u32 *)property_value = decoder->cont_mode;
+			vcd_status = VCD_S_SUCCESS;
+		}
+	break;
+	case VCD_I_DISABLE_DMX_SUPPORT:
+		if (sizeof(u32) == property_hdr->sz) {
+			*(u32 *)property_value = res_trk_get_disable_dmx();
+			vcd_status = VCD_S_SUCCESS;
+		}
+	break;
+	case VCD_I_DISABLE_DMX:
+		if (sizeof(u32) == property_hdr->sz) {
+			*(u32 *)property_value = decoder->dmx_disable;
 			vcd_status = VCD_S_SUCCESS;
 		}
 	break;
@@ -1361,6 +1418,14 @@ static u32 ddl_get_enc_property(struct ddl_client_context *ddl,
 			property_value);
 		vcd_status = VCD_S_SUCCESS;
 	break;
+	case VCD_I_ENABLE_SPS_PPS_FOR_IDR:
+		if (sizeof(struct vcd_property_sps_pps_for_idr_enable) ==
+			property_hdr->sz) {
+			*(struct vcd_property_sps_pps_for_idr_enable *)
+				property_value = encoder->sps_pps;
+			vcd_status = VCD_S_SUCCESS;
+		}
+	break;
 	default:
 		vcd_status = VCD_ERR_ILLEGAL_OP;
 		break;
@@ -1482,6 +1547,7 @@ void ddl_set_default_dec_property(struct ddl_client_context *ddl)
 	decoder->field_needed_for_prev_ip = 0;
 	decoder->cont_mode = 0;
 	decoder->reconfig_detected = false;
+	decoder->dmx_disable = false;
 	ddl_set_default_metadata_flag(ddl);
 	ddl_set_default_decoder_buffer_req(decoder, true);
 }
@@ -1513,6 +1579,8 @@ static void ddl_set_default_enc_property(struct ddl_client_context *ddl)
 	encoder->hdr_ext_control = 0;
 	encoder->mb_info_enable  = false;
 	encoder->num_references_for_p_frame = DDL_MIN_NUM_REF_FOR_P_FRAME;
+	if (encoder->codec.codec == VCD_CODEC_MPEG4)
+		encoder->closed_gop = true;
 	ddl_set_default_metadata_flag(ddl);
 	ddl_set_default_encoder_buffer_req(encoder);
 }
@@ -1689,7 +1757,7 @@ u32 ddl_set_default_decoder_buffer_req(struct ddl_decoder_data *decoder,
 		if (!decoder->cont_mode)
 			min_dpb = ddl_decoder_min_num_dpb(decoder);
 		else
-			min_dpb = 5;
+			min_dpb = res_trk_get_min_dpb_count();
 		frame_size = &decoder->client_frame_size;
 		output_buf_req = &decoder->client_output_buf_req;
 		input_buf_req = &decoder->client_input_buf_req;
@@ -1706,7 +1774,7 @@ u32 ddl_set_default_decoder_buffer_req(struct ddl_decoder_data *decoder,
 	}
 	memset(output_buf_req, 0,
 		sizeof(struct vcd_buffer_requirement));
-	if (!estimate && !decoder->idr_only_decoding && !decoder->cont_mode)
+	if (!decoder->idr_only_decoding && !decoder->cont_mode)
 		output_buf_req->actual_count = min_dpb + 4;
 	else
 		output_buf_req->actual_count = min_dpb;
@@ -1806,8 +1874,16 @@ static u32 ddl_valid_buffer_requirement(struct vcd_buffer_requirement
 		/*original_buf_req->align <= req_buf_req->align,*/
 		original_buf_req->sz <= req_buf_req->sz)
 		status = true;
-	else
+	else {
 		DDL_MSG_ERROR("ddl_valid_buf_req:Failed");
+		DDL_MSG_ERROR("codec_buf_req: min_cnt=%d, mx_cnt=%d, "
+			"align=%d, sz=%d\n", original_buf_req->min_count,
+			original_buf_req->max_count, original_buf_req->align,
+			original_buf_req->sz);
+		DDL_MSG_ERROR("client_buffs: actual_count=%d, align=%d, "
+			"sz=%d\n", req_buf_req->actual_count,
+			req_buf_req->align,	req_buf_req->sz);
+	}
 	return status;
 }
 
@@ -1916,5 +1992,6 @@ void ddl_set_initial_default_values(struct ddl_client_context *ddl)
 		encoder->frame_rate.fps_numerator = DDL_INITIAL_FRAME_RATE;
 		encoder->frame_rate.fps_denominator = 1;
 		ddl_set_default_enc_property(ddl);
+		encoder->sps_pps.sps_pps_for_idr_enable_flag = false;
 	}
 }

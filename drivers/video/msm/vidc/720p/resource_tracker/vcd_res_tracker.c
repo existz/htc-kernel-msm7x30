@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,25 +9,19 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 #include <linux/firmware.h>
-#include <linux/pm_qos_params.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
-#include <mach/internal_power_rail.h>
+#include <linux/regulator/consumer.h>
 #include <mach/clk.h>
-#include <mach/msm_reqs.h>
 #include <linux/interrupt.h>
-#include "vidc_type.h"
+#include <media/msm/vidc_init.h>
+#include <media/msm/vidc_type.h>
 #include "vcd_res_tracker.h"
-#include "vidc_init.h"
 
 #define MSM_AXI_QOS_NAME "msm_vidc_reg"
+#define AXI_CLK_SCALING
 
 #define QVGA_PERF_LEVEL (300 * 30)
 #define VGA_PERF_LEVEL (1200 * 30)
@@ -37,23 +31,12 @@ static unsigned int mfc_clk_freq_table[3] = {
 	61440000, 122880000, 170667000
 };
 
-#ifndef CONFIG_MSM_NPA_SYSTEM_BUS
 static unsigned int axi_clk_freq_table_enc[2] = {
 	122880, 192000
 };
 static unsigned int axi_clk_freq_table_dec[2] = {
 	122880, 192000
 };
-#else
-static unsigned int axi_clk_freq_table_enc[2] = {
-	MSM_AXI_FLOW_VIDEO_RECORDING_720P,
-	MSM_AXI_FLOW_VIDEO_RECORDING_720P
-};
-static unsigned int axi_clk_freq_table_dec[2] = {
-	MSM_AXI_FLOW_VIDEO_PLAYBACK_720P,
-	MSM_AXI_FLOW_VIDEO_PLAYBACK_720P
-};
-#endif
 
 static struct res_trk_context resource_context;
 
@@ -137,13 +120,6 @@ static u32 res_trk_disable_videocore(void)
 	}
 	msleep(20);
 
-	rc = internal_pwr_rail_ctl(PWR_RAIL_MFC_CLK, 0);
-	if (rc) {
-		VCDRES_MSG_ERROR("\n clk_reset failed %d\n", rc);
-		mutex_unlock(&resource_context.lock);
-		return false;
-	}
-
 	clk_disable(resource_context.pclk);
 	clk_disable(resource_context.hclk);
 	clk_disable(resource_context.hclk_div2);
@@ -151,6 +127,13 @@ static u32 res_trk_disable_videocore(void)
 	clk_put(resource_context.hclk_div2);
 	clk_put(resource_context.hclk);
 	clk_put(resource_context.pclk);
+
+	rc = regulator_disable(resource_context.regulator);
+	if (rc) {
+		VCDRES_MSG_ERROR("\n regulator disable failed %d\n", rc);
+		mutex_unlock(&resource_context.lock);
+		return false;
+	}
 
 	resource_context.hclk_div2 = NULL;
 	resource_context.hclk = NULL;
@@ -283,41 +266,40 @@ static u32 res_trk_enable_videocore(void)
 	mutex_lock(&resource_context.lock);
 	if (!resource_context.rail_enabled) {
 		int rc = -1;
-		rc = internal_pwr_rail_mode(PWR_RAIL_MFC_CLK,
-			PWR_RAIL_CTL_MANUAL);
+
+		rc = regulator_enable(resource_context.regulator);
 		if (rc) {
-			VCDRES_MSG_ERROR("%s(): internal_pwr_rail_mode \
-					failed %d\n", __func__, rc);
-			mutex_unlock(&resource_context.lock);
-			return false;
+			VCDRES_MSG_ERROR("%s(): regulator_enable failed %d\n",
+							 __func__, rc);
+			goto bail_out;
 		}
-		VCDRES_MSG_LOW("%s(): internal_pwr_rail_mode Success %d\n",
-			__func__, rc);
+		VCDRES_MSG_LOW("%s(): regulator enable Success %d\n",
+							__func__, rc);
 
 		resource_context.pclk = clk_get(resource_context.device,
-			"mfc_pclk");
+			"iface_clk");
 
 		if (IS_ERR(resource_context.pclk)) {
-			VCDRES_MSG_ERROR("%s(): mfc_pclk get failed\n"
+			VCDRES_MSG_ERROR("%s(): iface_clk get failed\n"
 							 , __func__);
-			goto bail_out;
+			goto disable_regulator;
 		}
 
 		resource_context.hclk = clk_get(resource_context.device,
-			"mfc_clk");
+			"core_clk");
 
 		if (IS_ERR(resource_context.hclk)) {
-			VCDRES_MSG_ERROR("%s(): mfc_clk get failed\n"
+			VCDRES_MSG_ERROR("%s(): core_clk get failed\n"
 							 , __func__);
 
 			goto release_pclk;
 		}
 
 		resource_context.hclk_div2 =
-			clk_get(resource_context.device, "mfc_div2_clk");
+			clk_get(resource_context.device, "core_div2_clk");
 
 		if (IS_ERR(resource_context.hclk_div2)) {
-			VCDRES_MSG_ERROR("%s(): mfc_div2_clk get failed\n"
+			VCDRES_MSG_ERROR("%s(): core_div2_clk get failed\n"
 							 , __func__);
 			goto release_hclk_pclk;
 		}
@@ -343,16 +325,6 @@ static u32 res_trk_enable_videocore(void)
 			VCDRES_MSG_ERROR("vidc hclk_div2 Enable failed\n");
 			goto disable_hclk_pclk;
 		}
-
-		rc = internal_pwr_rail_ctl(PWR_RAIL_MFC_CLK, 1);
-		if (rc) {
-			VCDRES_MSG_ERROR("\n internal_pwr_rail_ctl failed %d\n"
-							 , rc);
-			goto disable_and_release_all_clks;
-		}
-		VCDRES_MSG_LOW("%s(): internal_pwr_rail_ctl Success %d\n"
-					   , __func__, rc);
-		msleep(20);
 
 		rc = clk_reset(resource_context.pclk, CLK_RESET_DEASSERT);
 		if (rc) {
@@ -385,6 +357,8 @@ release_hclk_pclk:
 release_pclk:
 	clk_put(resource_context.pclk);
 	resource_context.pclk = NULL;
+disable_regulator:
+	regulator_disable(resource_context.regulator);
 bail_out:
 	mutex_unlock(&resource_context.lock);
 	return false;
@@ -423,7 +397,7 @@ static u32 res_trk_convert_perf_lvl_to_freq(u64 perf_lvl)
 	return (u32)freq;
 }
 
-static struct pm_qos_request_list *qos_req_list;
+static struct clk *ebi1_clk;
 
 u32 res_trk_power_up(void)
 {
@@ -433,12 +407,12 @@ u32 res_trk_power_up(void)
 {
 	VCDRES_MSG_MED("\n res_trk_power_up():: "
 		"Calling AXI add requirement\n");
-	qos_req_list = pm_qos_add_request(PM_QOS_SYSTEM_BUS_FREQ,
-		PM_QOS_DEFAULT_VALUE);
-	if (IS_ERR_OR_NULL(qos_req_list)) {
+	ebi1_clk = clk_get(resource_context.device, "mem_clk");
+	if (IS_ERR(ebi1_clk)) {
 		VCDRES_MSG_ERROR("Request AXI bus QOS fails.");
 		return false;
 	}
+	clk_enable(ebi1_clk);
 }
 #endif
 
@@ -453,7 +427,8 @@ u32 res_trk_power_down(void)
 #ifdef AXI_CLK_SCALING
 	VCDRES_MSG_MED("\n res_trk_power_down()::"
 		"Calling AXI remove requirement\n");
-	pm_qos_remove_request(qos_req_list);
+	clk_disable(ebi1_clk);
+	clk_put(ebi1_clk);
 #endif
 	VCDRES_MSG_MED("\n res_trk_power_down():: Calling "
 		"res_trk_disable_videocore()\n");
@@ -546,8 +521,7 @@ u32 res_trk_set_perf_level(u32 req_perf_lvl, u32 *pn_set_perf_lvl,
     if (req_perf_lvl != VCD_RESTRK_MIN_PERF_LEVEL) {
 		VCDRES_MSG_MED("\n %s(): Setting AXI freq to %u",
 			__func__, axi_freq);
-		pm_qos_update_request(qos_req_list,
-			axi_freq);	
+		clk_set_rate(ebi1_clk, axi_freq * 1000);
 	}
 #endif
 
@@ -716,8 +690,82 @@ void res_trk_init(struct device *device, u32 irq)
 	resource_context.device = device;
 	resource_context.irq_num = irq;
 	resource_context.core_type = VCD_CORE_720P;
+	resource_context.regulator = regulator_get(NULL, "fs_mfc");
+	resource_context.vidc_platform_data =
+		(struct msm_vidc_platform_data *) device->platform_data;
+	if (resource_context.vidc_platform_data) {
+		resource_context.memtype =
+		resource_context.vidc_platform_data->memtype;
+	} else {
+		resource_context.memtype = -1;
+	}
 }
 
 u32 res_trk_get_core_type(void){
 	return resource_context.core_type;
 }
+
+u32 res_trk_get_mem_type(void){
+	return resource_context.memtype;
+}
+
+u32 res_trk_get_enable_ion(void)
+{
+	return 0;
+}
+
+struct ion_client *res_trk_get_ion_client(void)
+{
+	return NULL;
+}
+
+void res_trk_set_mem_type(enum ddl_mem_area mem_type)
+{
+	return;
+}
+
+u32 res_trk_get_disable_fullhd(void)
+{
+	return 0;
+}
+
+int res_trk_check_for_sec_session()
+{
+	return 0;
+}
+
+void res_trk_secure_unset(void)
+{
+	return;
+}
+
+void res_trk_secure_set(void)
+{
+	return;
+}
+
+int res_trk_open_secure_session()
+{
+	return -EINVAL;
+}
+
+int res_trk_close_secure_session()
+{
+	return 0;
+}
+u32 get_res_trk_perf_level(enum vcd_perf_level perf_level)
+{
+	return -ENOTSUPP;
+}
+u32 res_trk_is_cp_enabled(void)
+{
+	if (resource_context.vidc_platform_data->cp_enabled)
+		return 1;
+	else
+		return 0;
+}
+u32 res_trk_estimate_perf_level(u32 pn_perf_lvl)
+{
+	return 0;
+}
+

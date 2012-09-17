@@ -9,11 +9,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
 #include "vidc.h"
@@ -555,7 +550,6 @@ void vidc_1080p_get_decode_frame_result(
 void vidc_1080p_decode_seq_start_ch0(
 	struct vidc_1080p_dec_seq_start_param *param)
 {
-
 	VIDC_HWIO_OUT(REG_695082, VIDC_1080P_RISC2HOST_CMD_EMPTY);
 	VIDC_HWIO_OUT(REG_666957, VIDC_1080P_INIT_CH_INST_ID);
 	VIDC_HWIO_OUT(REG_117192,
@@ -568,6 +562,7 @@ void vidc_1080p_decode_seq_start_ch0(
 	VIDC_HWIO_OUT(REG_190381,  param->stream_buffersize);
 	VIDC_HWIO_OUT(REG_85655,  param->descriptor_buffer_size);
 	VIDC_HWIO_OUT(REG_889944,  param->shared_mem_addr_offset);
+	VIDC_HWIO_OUT(REG_404623, 0);
 	VIDC_HWIO_OUT(REG_397087, param->cmd_seq_num);
 	VIDC_HWIO_OUT(REG_666957, VIDC_1080P_DEC_TYPE_SEQ_HEADER |
 		param->inst_id);
@@ -576,7 +571,6 @@ void vidc_1080p_decode_seq_start_ch0(
 void vidc_1080p_decode_seq_start_ch1(
 	struct vidc_1080p_dec_seq_start_param *param)
 {
-
 	VIDC_HWIO_OUT(REG_695082, VIDC_1080P_RISC2HOST_CMD_EMPTY);
 	VIDC_HWIO_OUT(REG_313350, VIDC_1080P_INIT_CH_INST_ID);
 	VIDC_HWIO_OUT(REG_980194,
@@ -589,6 +583,7 @@ void vidc_1080p_decode_seq_start_ch1(
 	VIDC_HWIO_OUT(REG_887095, param->stream_buffersize);
 	VIDC_HWIO_OUT(REG_576987, param->descriptor_buffer_size);
 	VIDC_HWIO_OUT(REG_652528, param->shared_mem_addr_offset);
+	VIDC_HWIO_OUT(REG_404623, 0);
 	VIDC_HWIO_OUT(REG_254093, param->cmd_seq_num);
 	VIDC_HWIO_OUT(REG_313350, VIDC_1080P_DEC_TYPE_SEQ_HEADER |
 		param->inst_id);
@@ -616,7 +611,10 @@ void vidc_1080p_decode_frame_start_ch0(
 		VIDC_HWIO_OUT(REG_190381,
 			param->stream_buffersize);
 	}
-	dpb_config = VIDC_SETFIELD(param->dpb_flush,
+	dpb_config = VIDC_SETFIELD(param->dmx_disable,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_SHFT,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_BMSK) |
+				VIDC_SETFIELD(param->dpb_flush,
 					VIDC_1080P_SI_RG10_DPB_FLUSH_SHFT,
 					VIDC_1080P_SI_RG10_DPB_FLUSH_BMSK) |
 				VIDC_SETFIELD(param->dpb_count,
@@ -657,7 +655,10 @@ void vidc_1080p_decode_frame_start_ch1(
 		VIDC_HWIO_OUT(REG_887095,
 			param->stream_buffersize);
 	}
-	dpb_config = VIDC_SETFIELD(param->dpb_flush,
+	dpb_config = VIDC_SETFIELD(param->dmx_disable,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_SHFT,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_BMSK) |
+				VIDC_SETFIELD(param->dpb_flush,
 					VIDC_1080P_SI_RG10_DPB_FLUSH_SHFT,
 					VIDC_1080P_SI_RG10_DPB_FLUSH_BMSK) |
 				VIDC_SETFIELD(param->dpb_count,
@@ -678,10 +679,17 @@ void vidc_1080p_decode_frame_start_ch1(
 void vidc_1080p_decode_init_buffers_ch0(
 	struct vidc_1080p_dec_init_buffers_param *param)
 {
+	u32 dpb_config;
 	VIDC_HWIO_OUT(REG_695082, VIDC_1080P_RISC2HOST_CMD_EMPTY);
 	VIDC_HWIO_OUT(REG_666957, VIDC_1080P_INIT_CH_INST_ID);
+	dpb_config = VIDC_SETFIELD(param->dmx_disable,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_SHFT,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_BMSK) |
+				VIDC_SETFIELD(param->dpb_count,
+					VIDC_1080P_SI_RG10_NUM_DPB_SHFT,
+					VIDC_1080P_SI_RG10_NUM_DPB_BMSK);
 	VIDC_HWIO_OUT(REG_889944, param->shared_mem_addr_offset);
-	VIDC_HWIO_OUT(REG_404623, param->dpb_count);
+	VIDC_HWIO_OUT(REG_404623, dpb_config);
 	VIDC_HWIO_OUT(REG_397087, param->cmd_seq_num);
 	VIDC_HWIO_OUT(REG_666957, VIDC_1080P_DEC_TYPE_INIT_BUFFERS |
 		param->inst_id);
@@ -690,10 +698,17 @@ void vidc_1080p_decode_init_buffers_ch0(
 void vidc_1080p_decode_init_buffers_ch1(
 	struct vidc_1080p_dec_init_buffers_param *param)
 {
+	u32 dpb_config;
 	VIDC_HWIO_OUT(REG_695082, VIDC_1080P_RISC2HOST_CMD_EMPTY);
 	VIDC_HWIO_OUT(REG_313350, VIDC_1080P_INIT_CH_INST_ID);
+	dpb_config = VIDC_SETFIELD(param->dmx_disable,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_SHFT,
+					VIDC_1080P_SI_RG10_DMX_DISABLE_BMSK) |
+				VIDC_SETFIELD(param->dpb_count,
+					VIDC_1080P_SI_RG10_NUM_DPB_SHFT,
+					VIDC_1080P_SI_RG10_NUM_DPB_BMSK);
 	VIDC_HWIO_OUT(REG_652528,  param->shared_mem_addr_offset);
-	VIDC_HWIO_OUT(REG_220637, param->dpb_count);
+	VIDC_HWIO_OUT(REG_220637, dpb_config);
 	VIDC_HWIO_OUT(REG_254093, param->cmd_seq_num);
 	VIDC_HWIO_OUT(REG_313350, VIDC_1080P_DEC_TYPE_INIT_BUFFERS |
 		param->inst_id);
@@ -864,7 +879,7 @@ void vidc_1080p_set_encode_padding_control(u32 pad_ctrl_on,
 void vidc_1080p_encode_set_rc_config(u32 enable_frame_level_rc,
 	u32 enable_mb_level_rc_flag, u32 frame_qp)
 {
-   u32 rc_config = VIDC_SETFIELD(enable_frame_level_rc ,
+	u32 rc_config = VIDC_SETFIELD(enable_frame_level_rc ,
 					HWIO_REG_559908_FR_RC_EN_SHFT ,
 					HWIO_REG_559908_FR_RC_EN_BMSK) |
 			VIDC_SETFIELD(enable_mb_level_rc_flag ,

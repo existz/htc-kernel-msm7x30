@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,14 +9,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
  */
 
-#include "vidc_type.h"
+#include <media/msm/vidc_type.h>
 #include "vcd.h"
 
 #define NORMALIZATION_FACTOR 3600
@@ -107,9 +102,10 @@ u32 vcd_sched_add_client(struct vcd_clnt_ctxt *cctxt)
 				VCD_FAILED_RETURN(rc,
 					"Failed: Get VCD_I_FRAME_RATE");
 			}
-			cctxt->reqd_perf_lvl = cctxt->frm_p_units *
-				cctxt->frm_rate.fps_numerator /
-				cctxt->frm_rate.fps_denominator;
+			if (!cctxt->perf_set_by_client)
+				cctxt->reqd_perf_lvl = cctxt->frm_p_units *
+					cctxt->frm_rate.fps_numerator /
+					cctxt->frm_rate.fps_denominator;
 
 			cctxt->sched_clnt_hdl = sched_cctxt;
 			memset(sched_cctxt, 0,
